@@ -28,6 +28,9 @@ if (!BOT_TOKEN || !GUILD_ID || !WAITING_CHANNEL_ID || !ADMIN_ROLE_ID || !DONE_TE
   process.exit(1);
 }
 
+// ===== آيدي روم التقييمات المنفصل =====
+const RATING_CHANNEL_ID = '1529577728117047453'; 
+
 // ===== نظام حفظ إحصائيات الـ Done =====
 const DONE_FILE = path.join(__dirname, 'done_stats.json');
 
@@ -148,6 +151,10 @@ client.once(Events.ClientReady, async (c) => {
           { name: 'الاداري', description: 'اختر الإداري', type: 6, required: true },
           { name: 'العدد', description: 'عدد الـ Done للخصم', type: 4, required: true }
         ]
+      },
+      { 
+        name: 'تصفير_الكل', 
+        description: 'تصفير جميع إحصائيات الـ Done لجميع الإداريين (للإدارة العليا فقط)' 
       }
     ];
 
@@ -201,12 +208,13 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         const citizenUser = client.users.cache.get(citizenId) || await client.users.fetch(citizenId);
         const logMsgId = logMessage ? logMessage.id : 'none';
 
+        // تمت إضافة آيدي الإداري داخل زر التقييم لسهولة جلبه لاحقاً
         const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`rate_1_${logMsgId}`).setLabel('1⭐').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`rate_2_${logMsgId}`).setLabel('2⭐').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`rate_3_${logMsgId}`).setLabel('3⭐').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`rate_4_${logMsgId}`).setLabel('4⭐').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`rate_5_${logMsgId}`).setLabel('5⭐').setStyle(ButtonStyle.Success)
+          new ButtonBuilder().setCustomId(`rate_1_${logMsgId}_${adminId}`).setLabel('1⭐').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`rate_2_${logMsgId}_${adminId}`).setLabel('2⭐').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`rate_3_${logMsgId}_${adminId}`).setLabel('3⭐').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`rate_4_${logMsgId}_${adminId}`).setLabel('4⭐').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`rate_5_${logMsgId}_${adminId}`).setLabel('5⭐').setStyle(ButtonStyle.Success)
         );
 
         const dmEmbed = new EmbedBuilder()
@@ -242,13 +250,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const parts = interaction.customId.split('_');
     const rating = parts[1];
     const logMsgId = parts[2];
+    const adminId = parts[3]; // استخراج آيدي الإداري من الزر
     const stars = '⭐'.repeat(parseInt(rating));
 
     await interaction.update({ content: `✅ شكراً لتقييمك! (أعطيت ${stars})`, embeds: [], components: [] });
 
-    if (logMsgId && logMsgId !== 'none') {
-      try {
-        const guild = client.guilds.cache.get(GUILD_ID);
+    try {
+      const guild = client.guilds.cache.get(GUILD_ID);
+
+      // 1. تحديث رسالة اللوج القديمة (إذا كانت موجودة)
+      if (logMsgId && logMsgId !== 'none') {
         const logChannel = guild.channels.cache.get(DONE_TEXT_CHANNEL_ID);
         if (logChannel) {
           const logMessage = await logChannel.messages.fetch(logMsgId);
@@ -258,7 +269,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await logMessage.edit({ embeds: [updatedEmbed] });
           }
         }
-      } catch (e) { }
+      }
+
+      // 2. إرسال التقييم إلى روم التقييمات المنفصل
+      const ratingChannel = guild.channels.cache.get(RATING_CHANNEL_ID);
+      if (ratingChannel) {
+        const ratingEmbed = new EmbedBuilder()
+          .setColor(0xffd700) // لون ذهبي للتقييم
+          .setTitle('🌟 تقييم خدمة جديد')
+          .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true }))
+          .addFields(
+            { name: '👤 المواطن', value: `<@${interaction.user.id}>`, inline: true },
+            { name: '🛡️ الإداري', value: adminId ? `<@${adminId}>` : 'غير معروف', inline: true },
+            { name: '⭐ التقييم', value: stars, inline: false }
+          )
+          .setTimestamp();
+
+        await ratingChannel.send({ embeds: [ratingEmbed] });
+      }
+
+    } catch (e) { 
+      console.error('❌ خطأ أثناء معالجة وإرسال التقييم:', e);
     }
     return;
   }
@@ -358,6 +389,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     return interaction.reply({ 
       content: `➖ تم خصم \`${amount}\` Done من الإداري <@${targetUser.id}>.\n📊 الرصيد الحالي: \`${newCount}\`` 
+    });
+  }
+
+  // 5. أمر تصفير جميع الإحصائيات (Administrator)
+  if (interaction.commandName === 'تصفير_الكل') {
+    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+      return interaction.reply({ content: '❌ هذا الأمر خاص بالإدارة العليا (Administrator) فقط.', ephemeral: true });
+    }
+
+    // تفريغ البيانات وحفظ الملف وهو فارغ
+    doneCounts.clear();
+    saveDoneCounts();
+
+    return interaction.reply({ 
+      content: '⚠️ ✅ **تم تصفير جميع إحصائيات الـ Done لجميع الإداريين بنجاح.**' 
     });
   }
 
