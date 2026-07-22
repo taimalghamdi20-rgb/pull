@@ -37,7 +37,7 @@ if (!BOT_TOKEN || !GUILD_ID || !WAITING_CHANNEL_ID || !ADMIN_ROLE_ID || !DONE_TE
 const RATING_CHANNEL_ID = '1529577728117047453'; // آيدي روم التقييمات المنفصل
 const MAX_LEAVE_DAYS = 10; // الحد الأقصى لأيام الإجازة
 const LEAVE_PANEL_COLOR = 0xC2410C; // برتقالي غامق لامبد لوحة الاجازات
-const LEAVE_BANNER_PATH = path.join(__dirname, 'assets', 'leave_banner.png');
+const LEAVE_BANNER_PATH = path.join(__dirname, 'leave_banner.png');
 const LEAVE_BANNER_FILENAME = 'leave_banner.png';
 
 // ===== نظام حفظ إحصائيات الـ Done =====
