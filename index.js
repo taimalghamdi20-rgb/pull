@@ -116,7 +116,13 @@ async function tryPullForAllFreeAdmins(guild) {
     try {
       const adminMember = channel.members.first();
       await candidate.voice.setChannel(channel.id, 'سحب تلقائي لمواطن إلى إداري فاضي');
-      activeSessions.set(candidate.id, adminMember.id);
+      
+      // هنا بدأنا نحسب وقت بداية السحب
+      activeSessions.set(candidate.id, { 
+        adminId: adminMember.id, 
+        startTime: Date.now() 
+      });
+      
       console.log(`✅ تم سحب ${candidate.user.tag} إلى ${channel.name} (الإداري: ${adminMember.user.tag})`);
     } catch (err) {
       console.error(`⚠️ فشل سحب ${candidate.user.tag}:`, err.message);
@@ -175,13 +181,32 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const citizenId = newState.id;
 
   if (activeSessions.has(citizenId)) {
-    const adminId = activeSessions.get(citizenId);
+    const sessionData = activeSessions.get(citizenId);
+    const adminId = sessionData.adminId;
+    const startTime = sessionData.startTime;
 
     if (newState.channelId !== oldState.channelId) {
+      activeSessions.delete(citizenId); // مسح الجلسة بكل الأحوال
+
+      // حساب المدة اللي قضاها المواطن مع الإداري
+      const durationMs = Date.now() - startTime;
+      const durationSec = Math.floor(durationMs / 1000);
+
+      // نظام الحماية (Anti-Farm): إذا كانت المدة أقل من 10 ثواني، لا تحسب الـ Done
+      if (durationSec < 10) {
+        console.log(`🚫 تلاعب محتمل: تم تجاهل احتساب الـ Done للإداري ${adminId} مع المواطن ${citizenId} لأن المدة (${durationSec} ثواني) قصيرة جداً.`);
+        return; // الخروج من الوظيفة بدون إكمال العملية
+      }
+
+      // تحويل الثواني إلى صيغة مقروءة (دقائق وثواني)
+      const minutes = Math.floor(durationSec / 60);
+      const seconds = durationSec % 60;
+      const durationText = minutes > 0 ? `${minutes} دقيقة و ${seconds} ثانية` : `${seconds} ثانية`;
+
+      // إضافة الـ Done للإداري
       const currentCount = (doneCounts.get(adminId) || 0) + 1;
       doneCounts.set(adminId, currentCount);
       saveDoneCounts();
-      activeSessions.delete(citizenId);
 
       let logMessage = null;
       try {
@@ -194,6 +219,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
               { name: '👤 المواطن', value: `<@${citizenId}>`, inline: true },
               { name: '🛡️ الإداري', value: `<@${adminId}>`, inline: true },
               { name: '📊 مجموع الـ Done', value: `\`${currentCount}\``, inline: true },
+              { name: '⏱️ مدة الخدمة', value: `\`${durationText}\``, inline: true },
               { name: '⭐ التقييم', value: '⏳ بانتظار تقييم المواطن عبر الخاص...', inline: false }
             )
             .setTimestamp();
@@ -208,7 +234,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         const citizenUser = client.users.cache.get(citizenId) || await client.users.fetch(citizenId);
         const logMsgId = logMessage ? logMessage.id : 'none';
 
-        // تمت إضافة آيدي الإداري داخل زر التقييم لسهولة جلبه لاحقاً
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`rate_1_${logMsgId}_${adminId}`).setLabel('1⭐').setStyle(ButtonStyle.Secondary),
           new ButtonBuilder().setCustomId(`rate_2_${logMsgId}_${adminId}`).setLabel('2⭐').setStyle(ButtonStyle.Secondary),
@@ -220,13 +245,13 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         const dmEmbed = new EmbedBuilder()
           .setColor(0x5865f2)
           .setTitle('📝 تقييم الخدمة')
-          .setDescription(`مرحباً! لقد تم الانتهاء من خدمتك بواسطة الإداري <@${adminId}>.\nفضلاً، قيم مستوى المساعدة من 1 إلى 5 نجوم:`);
+          .setDescription(`مرحباً! لقد تم الانتهاء من خدمتك بواسطة الإداري <@${adminId}> في مدة ${durationText}.\nفضلاً، قيم مستوى المساعدة من 1 إلى 5 نجوم:`);
 
         await citizenUser.send({ embeds: [dmEmbed], components: [row] });
       } catch (err) {
         if (logMessage) {
           const updatedEmbed = EmbedBuilder.from(logMessage.embeds[0]);
-          updatedEmbed.data.fields[3].value = '❌ الخاص مغلق (لم يتم التقييم)';
+          updatedEmbed.data.fields[4].value = '❌ الخاص مغلق (لم يتم التقييم)';
           await logMessage.edit({ embeds: [updatedEmbed] });
         }
       }
@@ -250,7 +275,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const parts = interaction.customId.split('_');
     const rating = parts[1];
     const logMsgId = parts[2];
-    const adminId = parts[3]; // استخراج آيدي الإداري من الزر
+    const adminId = parts[3]; 
     const stars = '⭐'.repeat(parseInt(rating));
 
     await interaction.update({ content: `✅ شكراً لتقييمك! (أعطيت ${stars})`, embeds: [], components: [] });
@@ -265,7 +290,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const logMessage = await logChannel.messages.fetch(logMsgId);
           if (logMessage) {
             const updatedEmbed = EmbedBuilder.from(logMessage.embeds[0]);
-            updatedEmbed.data.fields[3].value = `${stars}`;
+            updatedEmbed.data.fields[4].value = `${stars}`; // التقييم صار الفيلد الخامس بدل الرابع
             await logMessage.edit({ embeds: [updatedEmbed] });
           }
         }
@@ -275,7 +300,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const ratingChannel = guild.channels.cache.get(RATING_CHANNEL_ID);
       if (ratingChannel) {
         const ratingEmbed = new EmbedBuilder()
-          .setColor(0xffd700) // لون ذهبي للتقييم
+          .setColor(0xffd700) 
           .setTitle('🌟 تقييم خدمة جديد')
           .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true }))
           .addFields(
@@ -398,7 +423,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.reply({ content: '❌ هذا الأمر خاص بالإدارة العليا (Administrator) فقط.', ephemeral: true });
     }
 
-    // تفريغ البيانات وحفظ الملف وهو فارغ
     doneCounts.clear();
     saveDoneCounts();
 
