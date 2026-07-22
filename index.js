@@ -24,7 +24,7 @@ const {
 } = process.env;
 
 if (!BOT_TOKEN || !GUILD_ID || !WAITING_CHANNEL_ID || !ADMIN_ROLE_ID || !DONE_TEXT_CHANNEL_ID) {
-  console.error('❌ تأكد من تعبئة المتغيرات في ملف .env');
+  console.error('❌ تأكد من تعبئة جميع المتغيرات في ملف .env');
   process.exit(1);
 }
 
@@ -131,8 +131,8 @@ client.once(Events.ClientReady, async (c) => {
 
   try {
     const commands = [
-      { name: 'سحب', description: 'سحب مواطن يدويًا لغرفتك الصوتية' },
       { name: 'توب_دن', description: 'عرض أكثر 10 إداريين إنجازاً للمواطنين' },
+      { name: 'جميع_الدنات', description: 'عرض قائمة بجميع الإداريين وإحصائياتهم من الأعلى للأقل' },
       {
         name: 'اضافة_دن',
         description: 'إضافة عدد من الـ Done لإداري (للإدارة العليا فقط)',
@@ -152,12 +152,15 @@ client.once(Events.ClientReady, async (c) => {
     ];
 
     await c.application.commands.set(commands, GUILD_ID);
-    console.log('✅ تم تسجيل أوامر السلاش في السيرفر بنجاح.');
+    console.log('✅ تم تحديث وتسجيل أوامر السلاش بنجاح.');
   } catch (error) {
     console.error('❌ خطأ في تسجيل الأوامر:', error);
   }
 });
 
+// ============================================================
+// حركة الصوت واحتساب الـ Done والتقييم
+// ============================================================
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const guild = newState.guild || oldState.guild;
   if (!guild || guild.id !== GUILD_ID) return;
@@ -234,7 +237,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 // ============================================================
 client.on(Events.InteractionCreate, async (interaction) => {
 
-  // استقبال تقييم المواطن
+  // استقبال تقييم المواطن عبر الخاص
   if (interaction.isButton() && interaction.customId.startsWith('rate_')) {
     const parts = interaction.customId.split('_');
     const rating = parts[1];
@@ -262,51 +265,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   if (!interaction.isChatInputCommand()) return;
 
-  // 1. أمر السحب اليدوي
-  if (interaction.commandName === 'سحب') {
-    const member = interaction.member;
-
-    if (!member.roles.cache.has(ADMIN_ROLE_ID)) {
-      return interaction.reply({ content: '❌ هذا الأمر خاص بالإداريين بس.', ephemeral: true });
-    }
-
-    const voiceState = member.voice;
-    if (!voiceState.channelId) {
-      return interaction.reply({ content: '❌ لازم تكون داخل روم صوتي.', ephemeral: true });
-    }
-
-    if (isMutedOrDeafened(voiceState)) {
-      return interaction.reply({ content: '❌ لا يمكنك سحب مواطن وأنت حاط ميوت أو ديفن!', ephemeral: true });
-    }
-
-    if ([...voiceState.channel.members.values()].length > 1) {
-      return interaction.reply({ content: '❌ لازم تكون لحالك بالروم.', ephemeral: true });
-    }
-
-    const candidate = getNextEligibleWaitingMember(interaction.guild);
-    if (!candidate) {
-      return interaction.reply({ content: 'ℹ️ ما فيه أحد مؤهل حاليًا بروم الانتظار.', ephemeral: true });
-    }
-
-    try {
-      await candidate.voice.setChannel(voiceState.channelId, `سحب يدوي بواسطة ${member.user.tag}`);
-      activeSessions.set(candidate.id, member.id);
-      return interaction.reply({ content: `✅ تم سحب <@${candidate.id}> إلى روومك.`, ephemeral: true });
-    } catch (err) {
-      return interaction.reply({ content: '⚠️ فشل السحب تأكد من صلاحية Move Members.', ephemeral: true });
-    }
-  }
-
-  // 2. أمر التوب (متاح للكل ليروا الإحصائيات)
+  // 1. أمر التوب 10
   if (interaction.commandName === 'توب_دن') {
     if (doneCounts.size === 0) {
       return interaction.reply({ content: '📊 ما فيه أي إحصائيات مسجلة حتى الآن.', ephemeral: true });
     }
 
-    // ترتيب الإداريين حسب الأكثر إنجازاً
     const sortedDones = [...doneCounts.entries()]
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 10); // أخذ أول 10 فقط
+      .slice(0, 10);
 
     const description = sortedDones.map(([adminId, count], index) => {
       const medals = ['🥇', '🥈', '🥉'];
@@ -323,7 +290,34 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return interaction.reply({ embeds: [embed] });
   }
 
-  // 3. أمر إضافة الـ Done (يجب أن يكون Administrator)
+  // 2. أمر عرض جميع الدنات لكل الإداريين بدون استثناء
+  if (interaction.commandName === 'جميع_الدنات') {
+    if (doneCounts.size === 0) {
+      return interaction.reply({ content: '📊 ما فيه أي إحصائيات مسجلة حتى الآن.', ephemeral: true });
+    }
+
+    const sortedDones = [...doneCounts.entries()]
+      .sort((a, b) => b[1] - a[1]);
+
+    const lines = sortedDones.map(([adminId, count], index) => {
+      return `**#${index + 1}** - <@${adminId}> : \`${count}\` Done`;
+    });
+
+    let fullText = lines.join('\n');
+    if (fullText.length > 3900) {
+      fullText = fullText.substring(0, 3900) + '\n\n⚠️ تم اختصار جزء من القائمة لكبر حجم البيانات.';
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle('📋 قائمة إحصائيات جميع الإداريين (من الأعلى للأقل)')
+      .setColor(0x3498db)
+      .setDescription(fullText)
+      .setTimestamp();
+
+    return interaction.reply({ embeds: [embed] });
+  }
+
+  // 3. أمر إضافة الـ Done (Administrator)
   if (interaction.commandName === 'اضافة_دن') {
     if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
       return interaction.reply({ content: '❌ هذا الأمر خاص بالإدارة العليا (Administrator) فقط.', ephemeral: true });
@@ -345,7 +339,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     });
   }
 
-  // 4. أمر خصم الـ Done (يجب أن يكون Administrator)
+  // 4. أمر خصم الـ Done (Administrator)
   if (interaction.commandName === 'خصم_دن') {
     if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
       return interaction.reply({ content: '❌ هذا الأمر خاص بالإدارة العليا (Administrator) فقط.', ephemeral: true });
@@ -357,8 +351,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (amount <= 0) return interaction.reply({ content: '❌ لازم يكون العدد أكبر من صفر.', ephemeral: true });
 
     const currentCount = doneCounts.get(targetUser.id) || 0;
-    
-    // تأكد من أن الرصيد لا ينزل تحت الصفر
     const newCount = Math.max(0, currentCount - amount);
     
     doneCounts.set(targetUser.id, newCount);
