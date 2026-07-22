@@ -25,16 +25,16 @@ const {
   CITIZEN_ROLE_ID,
   DONE_VOICE_CHANNEL_ID,
   DONE_TEXT_CHANNEL_ID,
-  REQUESTS_CHANNEL_ID, // روم طلبات الاجازات والاستقالات
 } = process.env;
 
-if (!BOT_TOKEN || !GUILD_ID || !WAITING_CHANNEL_ID || !ADMIN_ROLE_ID || !DONE_TEXT_CHANNEL_ID || !REQUESTS_CHANNEL_ID) {
-  console.error('❌ تأكد من تعبئة جميع المتغيرات في ملف .env (بما فيها REQUESTS_CHANNEL_ID)');
+if (!BOT_TOKEN || !GUILD_ID || !WAITING_CHANNEL_ID || !ADMIN_ROLE_ID || !DONE_TEXT_CHANNEL_ID) {
+  console.error('❌ تأكد من تعبئة جميع المتغيرات في ملف .env');
   process.exit(1);
 }
 
 // ===== إعدادات عامة =====
 const RATING_CHANNEL_ID = '1529577728117047453'; // آيدي روم التقييمات المنفصل
+const LEAVE_PANEL_CHANNEL_ID = '1529582419248681111'; // الروم اللي ترسل فيه لوحة/وصف الاجازات دايماً
 const MAX_LEAVE_DAYS = 10; // الحد الأقصى لأيام الإجازة
 const LEAVE_PANEL_COLOR = 0xC2410C; // برتقالي غامق لامبد لوحة الاجازات
 const LEAVE_BANNER_PATH = path.join(__dirname, 'leave_banner.png');
@@ -384,6 +384,56 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.showModal(modal);
         return;
       }
+      // 4. أزرار قبول/رفض طلب إجازة أو استقالة (للمسؤولين فقط)
+      if (interaction.customId.startsWith('req_accept_') || interaction.customId.startsWith('req_reject_')) {
+        if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+          return interaction.reply({
+            content: '❌ هذا الإجراء خاص بالإدارة العليا (Administrator) فقط.',
+            ephemeral: true,
+          });
+        }
+
+        const parts = interaction.customId.split('_'); // req, accept/reject, leave/resign, requesterId
+        const decision = parts[1]; // accept | reject
+        const reqType = parts[2]; // leave | resign
+        const requesterId = parts[3];
+
+        const isAccept = decision === 'accept';
+        const decisionLabel = isAccept ? '✅ تم القبول' : '❌ تم الرفض';
+        const decisionColor = isAccept ? 0x3ba55d : 0xed4245;
+
+        const originalEmbed = EmbedBuilder.from(interaction.message.embeds[0]);
+        const fields = originalEmbed.data.fields || [];
+        const statusIndex = fields.findIndex((f) => f.name.includes('الحالة'));
+        const statusValue = `${decisionLabel} بواسطة <@${interaction.user.id}>`;
+
+        if (statusIndex >= 0) {
+          fields[statusIndex].value = statusValue;
+        } else {
+          fields.push({ name: '📌 الحالة', value: statusValue });
+        }
+
+        originalEmbed.setFields(fields);
+        originalEmbed.setColor(decisionColor);
+
+        const oldComponents = interaction.message.components[0].components;
+        const disabledRow = new ActionRowBuilder().addComponents(
+          oldComponents.map((btn) => ButtonBuilder.from(btn).setDisabled(true))
+        );
+
+        await interaction.update({ embeds: [originalEmbed], components: [disabledRow] });
+
+        try {
+          const requesterUser = await client.users.fetch(requesterId);
+          const typeLabel = reqType === 'leave' ? 'الإجازة' : 'الاستقالة';
+          await requesterUser.send(
+            `📢 تم مراجعة طلب ${typeLabel} الخاص بك: **${decisionLabel}** بواسطة <@${interaction.user.id}>`
+          );
+        } catch (e) {
+          // الخاص مغلق عند العضو، نتجاهل الخطأ
+        }
+        return;
+      }
     }
 
     // --------------------------------------------------------
@@ -411,19 +461,33 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
         }
 
-        const requestsChannel = await interaction.guild.channels.fetch(REQUESTS_CHANNEL_ID);
+        const requestsChannel = await interaction.guild.channels.fetch(LEAVE_PANEL_CHANNEL_ID);
         const embed = new EmbedBuilder()
           .setTitle('📄 طلب إجازة جديد')
           .setColor(0x3ba55d)
           .addFields(
             { name: '👤 مقدم الطلب', value: `<@${interaction.user.id}>`, inline: true },
             { name: '📅 المدة', value: `${duration} ${duration === 1 ? 'يوم' : 'أيام'}`, inline: true },
-            { name: '📝 السبب', value: reason }
+            { name: '📝 السبب', value: reason },
+            { name: '📌 الحالة', value: '⏳ بانتظار مراجعة الإدارة' }
           )
           .setThumbnail(interaction.user.displayAvatarURL())
           .setTimestamp();
 
-        await requestsChannel.send({ embeds: [embed] });
+        const decisionRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`req_accept_leave_${interaction.user.id}`)
+            .setLabel('قبول')
+            .setEmoji('✅')
+            .setStyle(ButtonStyle.Success),
+          new ButtonBuilder()
+            .setCustomId(`req_reject_leave_${interaction.user.id}`)
+            .setLabel('رفض')
+            .setEmoji('❌')
+            .setStyle(ButtonStyle.Danger)
+        );
+
+        await requestsChannel.send({ embeds: [embed], components: [decisionRow] });
 
         return await interaction.reply({
           content: '✅ تم إرسال طلب الإجازة بنجاح، بانتظار مراجعة الإدارة.',
@@ -434,19 +498,33 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // 2. استلام طلب الاستقالة
       if (interaction.customId === 'resign_modal') {
         const reason = interaction.fields.getTextInputValue('resign_reason').trim();
-        const requestsChannel = await interaction.guild.channels.fetch(REQUESTS_CHANNEL_ID);
+        const requestsChannel = await interaction.guild.channels.fetch(LEAVE_PANEL_CHANNEL_ID);
 
         const embed = new EmbedBuilder()
           .setTitle('📝 طلب استقالة جديد')
           .setColor(0xed4245)
           .addFields(
             { name: '👤 مقدم الطلب', value: `<@${interaction.user.id}>`, inline: true },
-            { name: '📝 السبب', value: reason }
+            { name: '📝 السبب', value: reason },
+            { name: '📌 الحالة', value: '⏳ بانتظار مراجعة الإدارة' }
           )
           .setThumbnail(interaction.user.displayAvatarURL())
           .setTimestamp();
 
-        await requestsChannel.send({ embeds: [embed] });
+        const decisionRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`req_accept_resign_${interaction.user.id}`)
+            .setLabel('قبول')
+            .setEmoji('✅')
+            .setStyle(ButtonStyle.Success),
+          new ButtonBuilder()
+            .setCustomId(`req_reject_resign_${interaction.user.id}`)
+            .setLabel('رفض')
+            .setEmoji('❌')
+            .setStyle(ButtonStyle.Danger)
+        );
+
+        await requestsChannel.send({ embeds: [embed], components: [decisionRow] });
 
         return await interaction.reply({
           content: '✅ تم إرسال طلب الاستقالة بنجاح، بانتظار مراجعة الإدارة.',
@@ -496,7 +574,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         const bannerFile = new AttachmentBuilder(LEAVE_BANNER_PATH, { name: LEAVE_BANNER_FILENAME });
 
-        return interaction.reply({ embeds: [panelEmbed], components: [row], files: [bannerFile] });
+        try {
+          const panelChannel = await interaction.guild.channels.fetch(LEAVE_PANEL_CHANNEL_ID);
+          await panelChannel.send({ embeds: [panelEmbed], components: [row], files: [bannerFile] });
+
+          return interaction.reply({
+            content: `✅ تم إرسال لوحة الإجازات والاستقالات في <#${LEAVE_PANEL_CHANNEL_ID}>.`,
+            ephemeral: true,
+          });
+        } catch (err) {
+          console.error('❌ خطأ أثناء إرسال لوحة الاجازات:', err);
+          return interaction.reply({
+            content: '⚠️ ما قدرت أرسل اللوحة. تأكد إن البوت عنده صلاحية إرسال رسائل وصور بذاك الروم.',
+            ephemeral: true,
+          });
+        }
       }
 
       // أمر التوب 10
