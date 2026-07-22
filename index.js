@@ -1,6 +1,6 @@
 require('dotenv').config();
 const fs = require('fs');
-const path = require('path');
+const path = path = require('path');
 const {
   Client,
   GatewayIntentBits,
@@ -34,7 +34,8 @@ if (!BOT_TOKEN || !GUILD_ID || !WAITING_CHANNEL_ID || !ADMIN_ROLE_ID || !DONE_TE
 
 // ===== إعدادات عامة =====
 const RATING_CHANNEL_ID = '1529577728117047453'; // آيدي روم التقييمات المنفصل
-const LEAVE_PANEL_CHANNEL_ID = '1529582419248681111'; // الروم اللي ترسل فيه لوحة/وصف الاجازات دايماً
+const LEAVE_EMBED_CHANNEL_ID = '1529581700663869500'; // روم إمبد الإجازات (ممنوع إرسال أي شي فيه إلا البوت)
+const LEAVE_PANEL_CHANNEL_ID = '1529582419248681111'; // روم المسؤولين (اللي تنرسل فيه طلبات الإجازات والاستقالات)
 const LEAVE_ROLE_ID = '1529635475655102625'; // الرتبة اللي تنعطى تلقائيًا عند قبول طلب الإجازة
 const RESIGNATION_KEEP_ROLE_ID = '1529504750003945632'; // الرتبة الوحيدة اللي تبقى عند قبول الاستقالة
 const MAX_LEAVE_DAYS = 10; // الحد الأقصى لأيام الإجازة
@@ -67,10 +68,28 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
   ],
 });
 
 const pullLocks = new Set();
+
+// ============================================================
+// حماية روم الإجازات (حذف أي رسالة عضو فيه)
+// ============================================================
+client.on(Events.MessageCreate, async (message) => {
+  if (message.guild && message.channelId === LEAVE_EMBED_CHANNEL_ID) {
+    // إذا الرسالة مو من البوت، احذفها فوراً
+    if (!message.author.bot) {
+      try {
+        await message.delete();
+      } catch (err) {
+        console.error('❌ فشل حذف رسالة العضو في روم الإجازات:', err);
+      }
+    }
+  }
+});
 
 // ============================================================
 // دوال مساعدة لنظام السحب
@@ -147,7 +166,6 @@ async function tryPullForAllFreeAdmins(guild) {
 
 // ============================================================
 // تسجيل الأوامر عند تشغيل البوت
-// (أسماء الأوامر بالإنجليزي - الوصف بالعربي)
 // ============================================================
 client.once(Events.ClientReady, async (c) => {
   console.log(`🤖 البوت شغال باسم ${c.user.tag}`);
@@ -178,7 +196,7 @@ client.once(Events.ClientReady, async (c) => {
       },
       {
         name: 'send_leave_panel',
-        description: 'إرسال لوحة طلبات الإجازات والاستقالات في الروم الحالي (للإدارة فقط)'
+        description: 'إرسال لوحة طلبات الإجازات والاستقالات في روم الإجازات المخصص (للإدارة فقط)'
       }
     ];
 
@@ -406,6 +424,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.showModal(modal);
         return;
       }
+
       // 4. أزرار قبول/رفض طلب إجازة أو استقالة (للمسؤولين فقط)
       if (interaction.customId.startsWith('req_accept_') || interaction.customId.startsWith('req_reject_')) {
         if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
@@ -417,7 +436,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         const parts = interaction.customId.split('_'); // req, accept/reject, leave/resign, requesterId
         const decision = parts[1]; // accept | reject
-        const reqType = parts[2]; // leave | resign
+        const reqType = parts[2]; // leave | resign | break
         const requesterId = parts[3];
 
         const isAccept = decision === 'accept';
@@ -484,9 +503,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     // --------------------------------------------------------
-    // التعامل مع إرسال النماذج (Modals)
+    // التعامل مع إرسال النماذج (Modals) -> ترسل إلى روم المسؤولين
     // --------------------------------------------------------
     if (interaction.isModalSubmit()) {
+
+      const requestsChannel = await interaction.guild.channels.fetch(LEAVE_PANEL_CHANNEL_ID);
 
       // 1. استلام طلب الإجازة
       if (interaction.customId === 'leave_modal') {
@@ -508,7 +529,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
         }
 
-        const requestsChannel = await interaction.guild.channels.fetch(LEAVE_PANEL_CHANNEL_ID);
         const embed = new EmbedBuilder()
           .setTitle('📄 طلب إجازة جديد')
           .setColor(0x3ba55d)
@@ -537,7 +557,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await requestsChannel.send({ embeds: [embed], components: [decisionRow] });
 
         return await interaction.reply({
-          content: '✅ تم إرسال طلب الإجازة بنجاح، بانتظار مراجعة الإدارة.',
+          content: '✅ تم إرسال طلب الإجازة بنجاح إلى روم المسؤولين، بانتظار مراجعة الإدارة.',
           ephemeral: true,
         });
       }
@@ -545,7 +565,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // 2. استلام طلب الاستقالة
       if (interaction.customId === 'resign_modal') {
         const reason = interaction.fields.getTextInputValue('resign_reason').trim();
-        const requestsChannel = await interaction.guild.channels.fetch(LEAVE_PANEL_CHANNEL_ID);
 
         const embed = new EmbedBuilder()
           .setTitle('📝 طلب استقالة جديد')
@@ -574,7 +593,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await requestsChannel.send({ embeds: [embed], components: [decisionRow] });
 
         return await interaction.reply({
-          content: '✅ تم إرسال طلب الاستقالة بنجاح، بانتظار مراجعة الإدارة.',
+          content: '✅ تم إرسال طلب الاستقالة بنجاح إلى روم المسؤولين، بانتظار مراجعة الإدارة.',
           ephemeral: true,
         });
       }
@@ -582,7 +601,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // 3. استلام طلب كسر الإجازة
       if (interaction.customId === 'break_modal') {
         const reason = interaction.fields.getTextInputValue('break_reason').trim();
-        const requestsChannel = await interaction.guild.channels.fetch(LEAVE_PANEL_CHANNEL_ID);
 
         const embed = new EmbedBuilder()
           .setTitle('🔓 طلب كسر إجازة جديد')
@@ -611,7 +629,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await requestsChannel.send({ embeds: [embed], components: [decisionRow] });
 
         return await interaction.reply({
-          content: '✅ تم إرسال طلب كسر الإجازة بنجاح، بانتظار مراجعة الإدارة.',
+          content: '✅ تم إرسال طلب كسر الإجازة بنجاح إلى روم المسؤولين، بانتظار مراجعة الإدارة.',
           ephemeral: true,
         });
       }
@@ -622,7 +640,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // --------------------------------------------------------
     if (interaction.isChatInputCommand()) {
 
-      // أمر إرسال لوحة الإجازات والاستقالات
+      // أمر إرسال لوحة الإجازات والاستقالات (تنرسل في روم الإمبد المحدد)
       if (interaction.commandName === 'send_leave_panel') {
         if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بالإدارة العليا (Administrator) فقط.', ephemeral: true });
@@ -639,7 +657,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
               '📝 **طلب استقالة** — لتقديم طلب استقالة مع ذكر السبب.',
             ].join('\n')
           )
-          .setColor(LEAVE_PANEL_COLOR) // 🟠 برتقالي غامق
+          .setColor(LEAVE_PANEL_COLOR)
           .setImage(`attachment://${LEAVE_BANNER_FILENAME}`)
           .setFooter({ text: 'يرجى تعبئة البيانات بدقة قبل الإرسال' })
           .setTimestamp();
@@ -665,11 +683,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const bannerFile = new AttachmentBuilder(LEAVE_BANNER_PATH, { name: LEAVE_BANNER_FILENAME });
 
         try {
-          const panelChannel = await interaction.guild.channels.fetch(LEAVE_PANEL_CHANNEL_ID);
+          const panelChannel = await interaction.guild.channels.fetch(LEAVE_EMBED_CHANNEL_ID);
           await panelChannel.send({ embeds: [panelEmbed], components: [row], files: [bannerFile] });
 
           return interaction.reply({
-            content: `✅ تم إرسال لوحة الإجازات والاستقالات في <#${LEAVE_PANEL_CHANNEL_ID}>.`,
+            content: `✅ تم إرسال لوحة الإجازات والاستقالات في روم الإمبد <#${LEAVE_EMBED_CHANNEL_ID}>.`,
             ephemeral: true,
           });
         } catch (err) {
