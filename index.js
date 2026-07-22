@@ -1,25 +1,11 @@
-// ============================================================
-//  بوت سحب المواطنين من روم الانتظار إلى روم الإداري
-// ============================================================
-// الفكرة:
-//  1) فيه روم واحد "روم الانتظار" يجلس فيه المواطنين اللي يبون مساعدة.
-//  2) لما إداري (عنده الرتبة المحددة) يدخل روم صوتي ويكون "لحاله" فيه
-//     (ما فيه أحد ثاني) -> يصير مؤهل يتسحب له مواطن.
-//  3) البوت يدور على أول شخص بروم الانتظار مو حاطّ ميوت أو ديفن
-//     (لا سيلف ولا سيرفر) ويسحبه لروم الإداري تلقائيًا.
-//  4) اللي حاطين ميوت/ديفن يتم تجاوزهم (ما ينسحبون).
-//  5) فيه أمر /سحب يقدر الإداري يستخدمه يدوي لو حب يسحب هو بنفسه.
-// ============================================================
-
 require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
 const {
   Client,
   GatewayIntentBits,
   Events,
-  REST,
-  Routes,
-  SlashCommandBuilder,
-  PermissionFlagsBits,
+  EmbedBuilder,
 } = require('discord.js');
 
 const {
@@ -29,12 +15,36 @@ const {
   ADMIN_ROLE_ID,
   ADMIN_CATEGORY_ID,
   CITIZEN_ROLE_ID,
+  DONE_VOICE_CHANNEL_ID,
+  DONE_TEXT_CHANNEL_ID,
 } = process.env;
 
-if (!BOT_TOKEN || !GUILD_ID || !WAITING_CHANNEL_ID || !ADMIN_ROLE_ID) {
-  console.error('❌ لازم تعبي BOT_TOKEN و GUILD_ID و WAITING_CHANNEL_ID و ADMIN_ROLE_ID في ملف .env');
+if (!BOT_TOKEN || !GUILD_ID || !WAITING_CHANNEL_ID || !ADMIN_ROLE_ID || !DONE_VOICE_CHANNEL_ID || !DONE_TEXT_CHANNEL_ID) {
+  console.error('❌ لازم تعبي جميع المتغيرات المطلوبة في ملف .env بما فيها DONE_VOICE_CHANNEL_ID و DONE_TEXT_CHANNEL_ID');
   process.exit(1);
 }
+
+// ===== نظام حفظ إحصائيات الـ Done =====
+const DONE_FILE = path.join(__dirname, 'done_stats.json');
+
+function loadDoneCounts() {
+  try {
+    const raw = fs.readFileSync(DONE_FILE, 'utf8');
+    return new Map(Object.entries(JSON.parse(raw)));
+  } catch (err) {
+    return new Map();
+  }
+}
+
+function saveDoneCounts() {
+  const obj = Object.fromEntries(doneCounts);
+  fs.writeFileSync(DONE_FILE, JSON.stringify(obj, null, 2), 'utf8');
+}
+
+const doneCounts = loadDoneCounts();
+
+// خريطة لتتبع أي إداري يتعامل مع أي مواطن حالياً (citizenId -> adminId)
+const activeSessions = new Map();
 
 const client = new Client({
   intents: [
@@ -44,13 +54,14 @@ const client = new Client({
   ],
 });
 
-// لمنع تكرار السحب لنفس الروم بنفس اللحظة (debounce بسيط)
+// لمنع تكرار السحب لنفس الروم بنفس اللحظة
 const pullLocks = new Set();
 
 /**
  * يتحقق هل العضو حاطّ ميوت أو ديفن (سواء بنفسه أو من السيرفر)
  */
 function isMutedOrDeafened(voiceState) {
+  if (!voiceState) return false;
   return (
     voiceState.selfMute ||
     voiceState.selfDeaf ||
@@ -67,7 +78,6 @@ function getNextEligibleWaitingMember(guild) {
   if (!waitingChannel || !waitingChannel.members) return null;
 
   for (const [, member] of waitingChannel.members) {
-    // لو محدد رتبة مواطن، لازم العضو يكون عنده هالرتبة عشان يصير مؤهل
     if (CITIZEN_ROLE_ID && !member.roles.cache.has(CITIZEN_ROLE_ID)) continue;
 
     const vs = member.voice;
@@ -80,23 +90,28 @@ function getNextEligibleWaitingMember(guild) {
 
 /**
  * يتحقق هل قناة صوتية معينة هي "روم إداري فاضي":
- * فيها إداري واحد بس (لحاله) وما فيها غيره
+ * فيها إداري واحد بس (لحاله)، ما فيها غيره، ومو حاط ميوت ولا ديفن
  */
 function isFreeAdminRoom(channel) {
   if (!channel || channel.type !== 2 /* GuildVoice */) return false;
   if (ADMIN_CATEGORY_ID && channel.parentId !== ADMIN_CATEGORY_ID) return false;
   if (channel.id === WAITING_CHANNEL_ID) return false;
+  if (channel.id === DONE_VOICE_CHANNEL_ID) return false;
 
   const members = [...channel.members.values()];
   if (members.length !== 1) return false;
 
-  const onlyMember = members[0];
-  return onlyMember.roles.cache.has(ADMIN_ROLE_ID);
+  const adminMember = members[0];
+
+  // شرط: لازم يكون إداري + غير مفعّل للميوت أو الديفن
+  if (!adminMember.roles.cache.has(ADMIN_ROLE_ID)) return false;
+  if (isMutedOrDeafened(adminMember.voice)) return false;
+
+  return true;
 }
 
 /**
- * يسوي عملية السحب: يدور على كل الرومات، يلقى أي روم إداري فاضي،
- * ويسحب له أول مواطن مؤهل من روم الانتظار.
+ * يسوي عملية السحب التلقائي
  */
 async function tryPullForAllFreeAdmins(guild) {
   const voiceChannels = guild.channels.cache.filter((c) => c.type === 2);
@@ -106,12 +121,16 @@ async function tryPullForAllFreeAdmins(guild) {
     if (pullLocks.has(channel.id)) continue;
 
     const candidate = getNextEligibleWaitingMember(guild);
-    if (!candidate) continue; // ما فيه أحد مؤهل بروم الانتظار
+    if (!candidate) continue;
 
     pullLocks.add(channel.id);
     try {
+      const adminMember = channel.members.first();
       await candidate.voice.setChannel(channel.id, 'سحب تلقائي لمواطن إلى إداري فاضي');
-      console.log(`✅ تم سحب ${candidate.user.tag} إلى روم ${channel.name}`);
+
+      // ربط المواطن بالإداري لمعرفة من ساعده عند إرساله للـ Done
+      activeSessions.set(candidate.id, adminMember.id);
+      console.log(`✅ تم سحب ${candidate.user.tag} إلى روم ${channel.name} (الإداري: ${adminMember.user.tag})`);
     } catch (err) {
       console.error(`⚠️ فشل سحب ${candidate.user.tag}:`, err.message);
     } finally {
@@ -128,11 +147,54 @@ client.once(Events.ClientReady, (c) => {
   console.log(`🤖 البوت شغال باسم ${c.user.tag}`);
 });
 
-// أي تغيير بالحالة الصوتية (دخول/خروج/ميوت/ديفن) يعيد فحص الأدوار
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const guild = newState.guild || oldState.guild;
   if (!guild || guild.id !== GUILD_ID) return;
 
+  // 1. فحص نقل المواطن إلى روم الـ Done الصوتي
+  if (newState.channelId === DONE_VOICE_CHANNEL_ID && oldState.channelId !== DONE_VOICE_CHANNEL_ID) {
+    let adminId = activeSessions.get(newState.id);
+
+    // إذا لم تُسجل الجلسة تلقائياً، نفحص من كان معه في الروم السابق قبل النقل
+    if (!adminId && oldState.channel) {
+      const prevAdmin = oldState.channel.members.find(
+        (m) => m.roles.cache.has(ADMIN_ROLE_ID) && m.id !== newState.id
+      );
+      if (prevAdmin) adminId = prevAdmin.id;
+    }
+
+    if (adminId) {
+      // زيادة عدد الـ Done للإداري وحفظه
+      const currentCount = (doneCounts.get(adminId) || 0) + 1;
+      doneCounts.set(adminId, currentCount);
+      saveDoneCounts();
+
+      // إرسال اللوج في روم الـ Done الكتابي
+      try {
+        const logChannel = guild.channels.cache.get(DONE_TEXT_CHANNEL_ID);
+        if (logChannel) {
+          const embed = new EmbedBuilder()
+            .setColor(0x57f287)
+            .setTitle('✅ تم إنهاء خدمة مواطن (Done)')
+            .addFields(
+              { name: '👤 المواطن', value: `<@${newState.id}>`, inline: true },
+              { name: '🛡️ الإداري', value: `<@${adminId}>`, inline: true },
+              { name: '📊 مجموع الـ Done للإداري', value: `\`${currentCount}\``, inline: true }
+            )
+            .setTimestamp();
+
+          await logChannel.send({ embeds: [embed] });
+        }
+      } catch (err) {
+        console.error('❌ خطأ أثناء إرسال لوج الـ Done:', err);
+      }
+
+      // إزالة المواطن من الجلسات النشطة
+      activeSessions.delete(newState.id);
+    }
+  }
+
+  // 2. محاولة السحب التلقائي بعد أي تغيير في الحالة الصوتية
   try {
     await tryPullForAllFreeAdmins(guild);
   } catch (err) {
@@ -164,6 +226,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
     });
   }
 
+  // منع السحب إذا كان الإداري حاط ميوت أو ديفن
+  if (isMutedOrDeafened(voiceState)) {
+    return interaction.reply({
+      content: '❌ لا يمكنك سحب مواطن وأنت حاط ميوت أو ديفن!',
+      ephemeral: true,
+    });
+  }
+
   const channel = voiceState.channel;
   const membersInChannel = [...channel.members.values()];
   if (membersInChannel.length > 1) {
@@ -183,6 +253,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   try {
     await candidate.voice.setChannel(channel.id, `سحب يدوي بواسطة ${member.user.tag}`);
+    
+    // ربط المواطن بالإداري للسحب اليدوي
+    activeSessions.set(candidate.id, member.id);
+
     return interaction.reply({
       content: `✅ تم سحب <@${candidate.id}> إلى روومك.`,
       ephemeral: true,
