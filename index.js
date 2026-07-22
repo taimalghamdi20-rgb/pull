@@ -9,6 +9,7 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  PermissionFlagsBits,
 } = require('discord.js');
 
 const {
@@ -23,7 +24,7 @@ const {
 } = process.env;
 
 if (!BOT_TOKEN || !GUILD_ID || !WAITING_CHANNEL_ID || !ADMIN_ROLE_ID || !DONE_TEXT_CHANNEL_ID) {
-  console.error('❌ تأكد من تعبئة المتغيرات في ملف .env (تم الآن الاعتماد بشكل أساسي على DONE_TEXT_CHANNEL_ID للوج)');
+  console.error('❌ تأكد من تعبئة المتغيرات في ملف .env');
   process.exit(1);
 }
 
@@ -45,8 +46,6 @@ function saveDoneCounts() {
 }
 
 const doneCounts = loadDoneCounts();
-
-// خريطة لتتبع أي إداري يتعامل مع أي مواطن حالياً (citizenId -> adminId)
 const activeSessions = new Map();
 
 const client = new Client({
@@ -114,8 +113,6 @@ async function tryPullForAllFreeAdmins(guild) {
     try {
       const adminMember = channel.members.first();
       await candidate.voice.setChannel(channel.id, 'سحب تلقائي لمواطن إلى إداري فاضي');
-
-      // تسجيل الجلسة لبدء المتابعة
       activeSessions.set(candidate.id, adminMember.id);
       console.log(`✅ تم سحب ${candidate.user.tag} إلى ${channel.name} (الإداري: ${adminMember.user.tag})`);
     } catch (err) {
@@ -126,35 +123,56 @@ async function tryPullForAllFreeAdmins(guild) {
   }
 }
 
-client.once(Events.ClientReady, (c) => {
+// ============================================================
+// تسجيل الأوامر عند تشغيل البوت
+// ============================================================
+client.once(Events.ClientReady, async (c) => {
   console.log(`🤖 البوت شغال باسم ${c.user.tag}`);
+
+  try {
+    const commands = [
+      { name: 'سحب', description: 'سحب مواطن يدويًا لغرفتك الصوتية' },
+      { name: 'توب_دن', description: 'عرض أكثر 10 إداريين إنجازاً للمواطنين' },
+      {
+        name: 'اضافة_دن',
+        description: 'إضافة عدد من الـ Done لإداري (للإدارة العليا فقط)',
+        options: [
+          { name: 'الاداري', description: 'اختر الإداري', type: 6, required: true },
+          { name: 'العدد', description: 'عدد الـ Done للإضافة', type: 4, required: true }
+        ]
+      },
+      {
+        name: 'خصم_دن',
+        description: 'خصم عدد من الـ Done من إداري (للإدارة العليا فقط)',
+        options: [
+          { name: 'الاداري', description: 'اختر الإداري', type: 6, required: true },
+          { name: 'العدد', description: 'عدد الـ Done للخصم', type: 4, required: true }
+        ]
+      }
+    ];
+
+    await c.application.commands.set(commands, GUILD_ID);
+    console.log('✅ تم تسجيل أوامر السلاش في السيرفر بنجاح.');
+  } catch (error) {
+    console.error('❌ خطأ في تسجيل الأوامر:', error);
+  }
 });
 
-// ============================================================
-// فحص الحركة الصوتية (خروج المواطن + احتساب Done + إرسال التقييم)
-// ============================================================
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const guild = newState.guild || oldState.guild;
   if (!guild || guild.id !== GUILD_ID) return;
 
   const citizenId = newState.id;
 
-  // إذا كان هذا العضو مواطن مسجل حالياً بجلسة مع إداري
   if (activeSessions.has(citizenId)) {
     const adminId = activeSessions.get(citizenId);
 
-    // إذا قام بتغيير الروم (سواء طلع من نفسه، أو نقله الإداري لأي روم آخر بما فيها روم Done)
     if (newState.channelId !== oldState.channelId) {
-      
-      // 1. إعطاء الـ Done للإداري
       const currentCount = (doneCounts.get(adminId) || 0) + 1;
       doneCounts.set(adminId, currentCount);
       saveDoneCounts();
-
-      // مسح الجلسة عشان ما تتكرر
       activeSessions.delete(citizenId);
 
-      // 2. إرسال اللوج في روم السيرفر
       let logMessage = null;
       try {
         const logChannel = guild.channels.cache.get(DONE_TEXT_CHANNEL_ID);
@@ -176,7 +194,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         console.error('❌ خطأ أثناء إرسال لوج الـ Done:', err);
       }
 
-      // 3. إرسال أزرار التقييم في خاص المواطن
       try {
         const citizenUser = client.users.cache.get(citizenId) || await client.users.fetch(citizenId);
         const logMsgId = logMessage ? logMessage.id : 'none';
@@ -195,10 +212,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           .setDescription(`مرحباً! لقد تم الانتهاء من خدمتك بواسطة الإداري <@${adminId}>.\nفضلاً، قيم مستوى المساعدة من 1 إلى 5 نجوم:`);
 
         await citizenUser.send({ embeds: [dmEmbed], components: [row] });
-
       } catch (err) {
-        console.error(`❌ مقدرت أرسل رسالة التقييم للمواطن ${citizenId} (الخاص مغلق).`);
-        // تحديث رسالة اللوج إذا كان الخاص مغلق
         if (logMessage) {
           const updatedEmbed = EmbedBuilder.from(logMessage.embeds[0]);
           updatedEmbed.data.fields[3].value = '❌ الخاص مغلق (لم يتم التقييم)';
@@ -208,7 +222,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  // محاولة السحب التلقائي بعد أي تغيير
   try {
     await tryPullForAllFreeAdmins(guild);
   } catch (err) {
@@ -217,26 +230,19 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 });
 
 // ============================================================
-// التفاعلات (أمر السحب + أزرار التقييم)
+// التفاعلات والأوامر
 // ============================================================
 client.on(Events.InteractionCreate, async (interaction) => {
-  
-  // 1. استقبال تقييم المواطن من الخاص
+
+  // استقبال تقييم المواطن
   if (interaction.isButton() && interaction.customId.startsWith('rate_')) {
     const parts = interaction.customId.split('_');
     const rating = parts[1];
     const logMsgId = parts[2];
-
     const stars = '⭐'.repeat(parseInt(rating));
 
-    // شكر المواطن على التقييم في الخاص وإخفاء الأزرار
-    await interaction.update({
-      content: `✅ شكراً لتقييمك! (أعطيت ${stars} نجوم)`,
-      embeds: [],
-      components: []
-    });
+    await interaction.update({ content: `✅ شكراً لتقييمك! (أعطيت ${stars})`, embeds: [], components: [] });
 
-    // تحديث رسالة اللوج الأساسية في السيرفر
     if (logMsgId && logMsgId !== 'none') {
       try {
         const guild = client.guilds.cache.get(GUILD_ID);
@@ -245,19 +251,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const logMessage = await logChannel.messages.fetch(logMsgId);
           if (logMessage) {
             const updatedEmbed = EmbedBuilder.from(logMessage.embeds[0]);
-            updatedEmbed.data.fields[3].value = `${stars}`; // استبدال الـ ⏳ بالنجوم الفعلية
+            updatedEmbed.data.fields[3].value = `${stars}`;
             await logMessage.edit({ embeds: [updatedEmbed] });
           }
         }
-      } catch (e) {
-        console.error('❌ خطأ في تحديث رسالة التقييم في السيرفر:', e);
-      }
+      } catch (e) { }
     }
     return;
   }
 
-  // 2. أمر /سحب اليدوي
-  if (interaction.isChatInputCommand() && interaction.commandName === 'سحب') {
+  if (!interaction.isChatInputCommand()) return;
+
+  // 1. أمر السحب اليدوي
+  if (interaction.commandName === 'سحب') {
     const member = interaction.member;
 
     if (!member.roles.cache.has(ADMIN_ROLE_ID)) {
@@ -273,8 +279,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.reply({ content: '❌ لا يمكنك سحب مواطن وأنت حاط ميوت أو ديفن!', ephemeral: true });
     }
 
-    const channel = voiceState.channel;
-    if ([...channel.members.values()].length > 1) {
+    if ([...voiceState.channel.members.values()].length > 1) {
       return interaction.reply({ content: '❌ لازم تكون لحالك بالروم.', ephemeral: true });
     }
 
@@ -284,17 +289,86 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     try {
-      await candidate.voice.setChannel(channel.id, `سحب يدوي بواسطة ${member.user.tag}`);
-      
-      // تسجيل الجلسة في حالة السحب اليدوي لكي تعمل ميزة التقييم والخروج
+      await candidate.voice.setChannel(voiceState.channelId, `سحب يدوي بواسطة ${member.user.tag}`);
       activeSessions.set(candidate.id, member.id);
-
       return interaction.reply({ content: `✅ تم سحب <@${candidate.id}> إلى روومك.`, ephemeral: true });
     } catch (err) {
-      console.error(err);
       return interaction.reply({ content: '⚠️ فشل السحب تأكد من صلاحية Move Members.', ephemeral: true });
     }
   }
+
+  // 2. أمر التوب (متاح للكل ليروا الإحصائيات)
+  if (interaction.commandName === 'توب_دن') {
+    if (doneCounts.size === 0) {
+      return interaction.reply({ content: '📊 ما فيه أي إحصائيات مسجلة حتى الآن.', ephemeral: true });
+    }
+
+    // ترتيب الإداريين حسب الأكثر إنجازاً
+    const sortedDones = [...doneCounts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10); // أخذ أول 10 فقط
+
+    const description = sortedDones.map(([adminId, count], index) => {
+      const medals = ['🥇', '🥈', '🥉'];
+      const rank = index < 3 ? medals[index] : `**#${index + 1}**`;
+      return `${rank} - <@${adminId}> : \`${count}\` Done`;
+    }).join('\n\n');
+
+    const embed = new EmbedBuilder()
+      .setTitle('🏆 توب 10 إداريين (أكثر من ساعد المواطنين)')
+      .setColor(0xffd700)
+      .setDescription(description)
+      .setTimestamp();
+
+    return interaction.reply({ embeds: [embed] });
+  }
+
+  // 3. أمر إضافة الـ Done (يجب أن يكون Administrator)
+  if (interaction.commandName === 'اضافة_دن') {
+    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+      return interaction.reply({ content: '❌ هذا الأمر خاص بالإدارة العليا (Administrator) فقط.', ephemeral: true });
+    }
+
+    const targetUser = interaction.options.getUser('الاداري');
+    const amount = interaction.options.getInteger('العدد');
+
+    if (amount <= 0) return interaction.reply({ content: '❌ لازم يكون العدد أكبر من صفر.', ephemeral: true });
+
+    const currentCount = doneCounts.get(targetUser.id) || 0;
+    const newCount = currentCount + amount;
+    
+    doneCounts.set(targetUser.id, newCount);
+    saveDoneCounts();
+
+    return interaction.reply({ 
+      content: `✅ تم إضافة \`${amount}\` Done إلى الإداري <@${targetUser.id}>.\n📊 الرصيد الحالي: \`${newCount}\`` 
+    });
+  }
+
+  // 4. أمر خصم الـ Done (يجب أن يكون Administrator)
+  if (interaction.commandName === 'خصم_دن') {
+    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+      return interaction.reply({ content: '❌ هذا الأمر خاص بالإدارة العليا (Administrator) فقط.', ephemeral: true });
+    }
+
+    const targetUser = interaction.options.getUser('الاداري');
+    const amount = interaction.options.getInteger('العدد');
+
+    if (amount <= 0) return interaction.reply({ content: '❌ لازم يكون العدد أكبر من صفر.', ephemeral: true });
+
+    const currentCount = doneCounts.get(targetUser.id) || 0;
+    
+    // تأكد من أن الرصيد لا ينزل تحت الصفر
+    const newCount = Math.max(0, currentCount - amount);
+    
+    doneCounts.set(targetUser.id, newCount);
+    saveDoneCounts();
+
+    return interaction.reply({ 
+      content: `➖ تم خصم \`${amount}\` Done من الإداري <@${targetUser.id}>.\n📊 الرصيد الحالي: \`${newCount}\`` 
+    });
+  }
+
 });
 
 client.login(BOT_TOKEN);
