@@ -346,7 +346,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setStyle(TextInputStyle.Short)
           .setPlaceholder('مثال: 3')
           .setRequired(true)
-          .setMaxLength(3);
+          .setMaxLength(2);
 
         const reasonInput = new TextInputBuilder()
           .setCustomId('leave_reason')
@@ -376,6 +376,26 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setLabel('سبب الاستقالة')
           .setStyle(TextInputStyle.Paragraph)
           .setPlaceholder('اكتب سبب تقديم الاستقالة بالتفصيل')
+          .setRequired(true)
+          .setMaxLength(500);
+
+        modal.addComponents(new ActionRowBuilder().addComponents(reasonInput));
+
+        await interaction.showModal(modal);
+        return;
+      }
+
+      // 3.5 زر فتح نموذج (Modal) طلب كسر الإجازة
+      if (interaction.customId === 'open_break_modal') {
+        const modal = new ModalBuilder()
+          .setCustomId('break_modal')
+          .setTitle('🔓 طلب كسر إجازة');
+
+        const reasonInput = new TextInputBuilder()
+          .setCustomId('break_reason')
+          .setLabel('سبب كسر الإجازة')
+          .setStyle(TextInputStyle.Paragraph)
+          .setPlaceholder('اكتب سبب كسر الإجازة بالتفصيل')
           .setRequired(true)
           .setMaxLength(500);
 
@@ -425,7 +445,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         try {
           const requesterUser = await client.users.fetch(requesterId);
-          const typeLabel = reqType === 'leave' ? 'الإجازة' : 'الاستقالة';
+          const typeLabels = { leave: 'الإجازة', resign: 'الاستقالة', break: 'كسر الإجازة' };
+          const typeLabel = typeLabels[reqType] || 'الطلب';
           await requesterUser.send(
             `📢 تم مراجعة طلب ${typeLabel} الخاص بك: **${decisionLabel}** بواسطة <@${interaction.user.id}>`
           );
@@ -531,6 +552,43 @@ client.on(Events.InteractionCreate, async (interaction) => {
           ephemeral: true,
         });
       }
+
+      // 3. استلام طلب كسر الإجازة
+      if (interaction.customId === 'break_modal') {
+        const reason = interaction.fields.getTextInputValue('break_reason').trim();
+        const requestsChannel = await interaction.guild.channels.fetch(LEAVE_PANEL_CHANNEL_ID);
+
+        const embed = new EmbedBuilder()
+          .setTitle('🔓 طلب كسر إجازة جديد')
+          .setColor(0xf1a10c)
+          .addFields(
+            { name: '👤 مقدم الطلب', value: `<@${interaction.user.id}>`, inline: true },
+            { name: '📝 سبب كسر الإجازة', value: reason },
+            { name: '📌 الحالة', value: '⏳ بانتظار مراجعة الإدارة' }
+          )
+          .setThumbnail(interaction.user.displayAvatarURL())
+          .setTimestamp();
+
+        const decisionRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`req_accept_break_${interaction.user.id}`)
+            .setLabel('قبول')
+            .setEmoji('✅')
+            .setStyle(ButtonStyle.Success),
+          new ButtonBuilder()
+            .setCustomId(`req_reject_break_${interaction.user.id}`)
+            .setLabel('رفض')
+            .setEmoji('❌')
+            .setStyle(ButtonStyle.Danger)
+        );
+
+        await requestsChannel.send({ embeds: [embed], components: [decisionRow] });
+
+        return await interaction.reply({
+          content: '✅ تم إرسال طلب كسر الإجازة بنجاح، بانتظار مراجعة الإدارة.',
+          ephemeral: true,
+        });
+      }
     }
 
     // --------------------------------------------------------
@@ -551,6 +609,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
               'اختر نوع الطلب اللي تبيه من الأزرار تحت:',
               '',
               `📄 **طلب إجازة** — لطلب إجازة (بحد أقصى ${MAX_LEAVE_DAYS} أيام) مع ذكر السبب.`,
+              '🔓 **طلب كسر إجازة** — إذا رجعت من إجازتك بدري وتبي توضح السبب.',
               '📝 **طلب استقالة** — لتقديم طلب استقالة مع ذكر السبب.',
             ].join('\n')
           )
@@ -565,6 +624,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
             .setLabel('طلب إجازة')
             .setEmoji('📄')
             .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId('open_break_modal')
+            .setLabel('طلب كسر إجازة')
+            .setEmoji('🔓')
+            .setStyle(ButtonStyle.Secondary),
           new ButtonBuilder()
             .setCustomId('open_resign_modal')
             .setLabel('طلب استقالة')
