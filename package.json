@@ -1,7 +1,7 @@
 {
   "name": "pull-citizens-bot",
-  "version": "1.0.0",
-  "description": "بوت يسحب المواطنين من روم الانتظار إلى روم الإداري تلقائيًا",
+  "version": "2.0.0",
+  "description": "بوت سحب المواطنين مع نظام تقييم وإجازات باستخدام SQLite",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
@@ -9,6 +9,7 @@
     "deploy": "node deploy-commands.js"
   },
   "dependencies": {
+    "better-sqlite3": "^9.4.3",
     "discord.js": "^14.15.3",
     "dotenv": "^16.4.5"
   }
