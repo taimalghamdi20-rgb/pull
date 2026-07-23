@@ -38,6 +38,7 @@ const WAITING_CHANNEL_IDS = WAITING_CHANNEL_ID
   .filter(Boolean);
 
 // ===== إعدادات عامة =====
+const CITIZEN_ALLOWED_CATEGORY_ID = '1459304931013033994'; // الكاتاقوري المسموح بالسحب منه حصراً
 const RATING_CHANNEL_ID = '1529482677516898555'; // روم تقييمات الإداريين المنفصل
 const LEAVE_EMBED_CHANNEL_ID = '1529495796247167178'; // الروم اللي فيه لوحة طلبات الإجازة
 const LEAVE_PANEL_CHANNEL_ID = '1529440458030321714'; // روم المسؤولين اللي توصله طلبات الإجازة/الاستقالة للمراجعة
@@ -161,10 +162,17 @@ function getNextEligibleWaitingMember(guild) {
     const waitingChannel = guild.channels.cache.get(waitingId);
     if (!waitingChannel || !waitingChannel.members) continue;
 
+    // 🔒 التحقق من أن روم الانتظار يقع داخل الكاتاقوري المحدد حصراً
+    if (waitingChannel.parentId !== CITIZEN_ALLOWED_CATEGORY_ID) continue;
+
     for (const [, member] of waitingChannel.members) {
       if (CITIZEN_ROLE_ID && !member.roles.cache.has(CITIZEN_ROLE_ID)) continue;
 
       const vs = member.voice;
+
+      // 🔒 شرط إضافي: التأكد من أن القناة الصوتية للمواطن في الكاتاقوري المحدد
+      if (vs.channel && vs.channel.parentId !== CITIZEN_ALLOWED_CATEGORY_ID) continue;
+
       if (!isMutedOrDeafened(vs)) {
         return member;
       }
@@ -606,10 +614,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isModalSubmit()) {
       const requestsChannel = await interaction.guild.channels.fetch(LEAVE_PANEL_CHANNEL_ID);
 
-      // تصميم الـ Embed المطابق للصورة
       const buildApplicationEmbed = (typeTitle, fieldsData) => {
         return new EmbedBuilder()
-          .setColor(0x2f3136) // لون داكن مطابق للديسكورد
+          .setColor(0x2f3136)
           .setTitle(`📨 A new application has been submitted. (${typeTitle})`)
           .setDescription(`**From:** <@${interaction.user.id}>\n\`( ${interaction.user.username} )\``)
           .addFields(fieldsData)
@@ -850,13 +857,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const embed = new EmbedBuilder()
           .setTitle('🏆 توب 10 إداريين (أكثر من ساعد المواطنين)')
           .setColor(0xffd700)
-          .setDescription(description)
-          .setTimestamp();
+          .setDescription(description);
 
         return interaction.reply({ embeds: [embed] });
       }
 
-      // أمر عرض جميع الدنات
+      // أمر عرض الكل
       if (interaction.commandName === 'all_dones') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة فقط.', ephemeral: true });
@@ -864,88 +870,69 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (doneCounts.size === 0) return interaction.reply({ content: '📊 ما فيه أي إحصائيات مسجلة حتى الآن.', ephemeral: true });
 
         const sortedDones = [...doneCounts.entries()].sort((a, b) => b[1] - a[1]);
-        const lines = sortedDones.map(([adminId, count], index) => `**#${index + 1}** - <@${adminId}> : \`${count}\` Done`);
 
-        let fullText = lines.join('\n');
-        if (fullText.length > 3900) {
-          fullText = fullText.substring(0, 3900) + '\n\n⚠️ تم اختصار جزء من القائمة لكبر حجم البيانات.';
-        }
+        const description = sortedDones.map(([adminId, count], index) => {
+          return `**#${index + 1}** - <@${adminId}> : \`${count}\` Done`;
+        }).join('\n');
 
         const embed = new EmbedBuilder()
-          .setTitle('📋 قائمة إحصائيات جميع الإداريين (من الأعلى للأقل)')
+          .setTitle('📊 إحصائيات جميع الإداريين (Done)')
           .setColor(0x3498db)
-          .setDescription(fullText)
-          .setTimestamp();
+          .setDescription(description.length > 4096 ? description.slice(0, 4090) + '...' : description);
 
         return interaction.reply({ embeds: [embed] });
       }
 
-      // أمر إضافة الـ Done
+      // إضافة إنجازات
       if (interaction.commandName === 'add_done') {
         if (!hasStaffRole(interaction.member)) {
-          return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة فقط.', ephemeral: true });
+          return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة العليا فقط.', ephemeral: true });
         }
 
-        const targetUser = interaction.options.getUser('admin');
+        const admin = interaction.options.getUser('admin');
         const amount = interaction.options.getInteger('amount');
 
-        if (amount <= 0) return interaction.reply({ content: '❌ لازم يكون العدد أكبر من صفر.', ephemeral: true });
-
-        const currentCount = doneCounts.get(targetUser.id) || 0;
+        const currentCount = doneCounts.get(admin.id) || 0;
         const newCount = currentCount + amount;
-
-        doneCounts.set(targetUser.id, newCount);
+        doneCounts.set(admin.id, newCount);
         saveDoneCounts();
 
-        return interaction.reply({
-          content: `✅ تم إضافة \`${amount}\` Done إلى الإداري <@${targetUser.id}>.\n📊 الرصيد الحالي: \`${newCount}\``
-        });
+        return interaction.reply({ content: `✅ تم إضافة \`${amount}\` إلى إحصائيات <@${admin.id}>. المجموع الحالي: \`${newCount}\``, ephemeral: true });
       }
 
-      // أمر خصم الـ Done
+      // خصم إنجازات
       if (interaction.commandName === 'remove_done') {
         if (!hasStaffRole(interaction.member)) {
-          return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة فقط.', ephemeral: true });
+          return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة العليا فقط.', ephemeral: true });
         }
 
-        const targetUser = interaction.options.getUser('admin');
+        const admin = interaction.options.getUser('admin');
         const amount = interaction.options.getInteger('amount');
 
-        if (amount <= 0) return interaction.reply({ content: '❌ لازم يكون العدد أكبر من صفر.', ephemeral: true });
-
-        const currentCount = doneCounts.get(targetUser.id) || 0;
+        const currentCount = doneCounts.get(admin.id) || 0;
         const newCount = Math.max(0, currentCount - amount);
-
-        doneCounts.set(targetUser.id, newCount);
+        doneCounts.set(admin.id, newCount);
         saveDoneCounts();
 
-        return interaction.reply({
-          content: `➖ تم خصم \`${amount}\` Done من الإداري <@${targetUser.id}>.\n📊 الرصيد الحالي: \`${newCount}\``
-        });
+        return interaction.reply({ content: `✅ تم خصم \`${amount}\` من إحصائيات <@${admin.id}>. المجموع الحالي: \`${newCount}\``, ephemeral: true });
       }
 
-      // أمر تصفير جميع الإحصائيات
+      // تصفير الإحصائيات
       if (interaction.commandName === 'reset_all') {
         if (!hasStaffRole(interaction.member)) {
-          return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة فقط.', ephemeral: true });
+          return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة العليا فقط.', ephemeral: true });
         }
 
         doneCounts.clear();
         saveDoneCounts();
 
-        return interaction.reply({
-          content: '⚠️ ✅ **تم تصفير جميع إحصائيات الـ Done لجميع الإداريين بنجاح.**'
-        });
+        return interaction.reply({ content: '🧹 تم تصفير جميع إحصائيات الـ Done بنجاح!', ephemeral: true });
       }
     }
-
-  } catch (err) {
-    console.error('⚠️ خطأ أثناء معالجة التفاعل:', err);
-    if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
-      await interaction.reply({
-        content: '⚠️ صار خطأ غير متوقع، حاول مرة ثانية.',
-        ephemeral: true,
-      });
+  } catch (error) {
+    console.error('❌ خطأ أثناء معالجة التفاعل:', error);
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({ content: '❌ حدث خطأ أثناء معالجة الطلب.', ephemeral: true }).catch(() => null);
     }
   }
 });
