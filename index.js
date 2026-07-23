@@ -12,6 +12,7 @@ const {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
+  PermissionFlagsBits,
   AttachmentBuilder,
 } = require('discord.js');
 
@@ -90,7 +91,10 @@ const activeSessions = new Map(); // citizenId -> { adminId, startTime } — ل�
 // ============================================================
 client.on(Events.MessageCreate, async (message) => {
   if (message.guild && message.channelId === LEAVE_EMBED_CHANNEL_ID) {
-    if (!message.author.bot) {
+    if (message.author.bot) return;
+
+    const isAdmin = message.member && message.member.permissions.has(PermissionFlagsBits.Administrator);
+    if (!isAdmin) {
       try {
         await message.delete();
       } catch (err) {
