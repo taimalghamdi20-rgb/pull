@@ -1,6 +1,6 @@
 require('dotenv').config();
 const fs = require('fs');
-const path = path = require('path');
+const path = require('path');
 const {
   Client,
   GatewayIntentBits,
@@ -80,7 +80,6 @@ const pullLocks = new Set();
 // ============================================================
 client.on(Events.MessageCreate, async (message) => {
   if (message.guild && message.channelId === LEAVE_EMBED_CHANNEL_ID) {
-    // إذا الرسالة مو من البوت، احذفها فوراً
     if (!message.author.bot) {
       try {
         await message.delete();
@@ -434,9 +433,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
         }
 
-        const parts = interaction.customId.split('_'); // req, accept/reject, leave/resign, requesterId
-        const decision = parts[1]; // accept | reject
-        const reqType = parts[2]; // leave | resign | break
+        const parts = interaction.customId.split('_');
+        const decision = parts[1];
+        const reqType = parts[2];
         const requesterId = parts[3];
 
         const isAccept = decision === 'accept';
@@ -464,7 +463,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         await interaction.update({ embeds: [originalEmbed], components: [disabledRow] });
 
-        // ===== تطبيق تغييرات الرتب تلقائيًا عند القبول =====
         let roleActionNote = '';
         if (isAccept) {
           try {
@@ -495,21 +493,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
           await requesterUser.send(
             `📢 تم مراجعة طلب ${typeLabel} الخاص بك: **${decisionLabel}** بواسطة <@${interaction.user.id}>${roleActionNote}`
           );
-        } catch (e) {
-          // الخاص مغلق عند العضو، نتجاهل الخطأ
-        }
+        } catch (e) {}
         return;
       }
     }
 
     // --------------------------------------------------------
-    // التعامل مع إرسال النماذج (Modals) -> ترسل إلى روم المسؤولين
+    // التعامل مع إرسال النماذج (Modals)
     // --------------------------------------------------------
     if (interaction.isModalSubmit()) {
-
       const requestsChannel = await interaction.guild.channels.fetch(LEAVE_PANEL_CHANNEL_ID);
 
-      // 1. استلام طلب الإجازة
       if (interaction.customId === 'leave_modal') {
         const durationRaw = interaction.fields.getTextInputValue('leave_duration').trim();
         const reason = interaction.fields.getTextInputValue('leave_reason').trim();
@@ -562,7 +556,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
       }
 
-      // 2. استلام طلب الاستقالة
       if (interaction.customId === 'resign_modal') {
         const reason = interaction.fields.getTextInputValue('resign_reason').trim();
 
@@ -598,7 +591,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
       }
 
-      // 3. استلام طلب كسر الإجازة
       if (interaction.customId === 'break_modal') {
         const reason = interaction.fields.getTextInputValue('break_reason').trim();
 
@@ -640,7 +632,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // --------------------------------------------------------
     if (interaction.isChatInputCommand()) {
 
-      // أمر إرسال لوحة الإجازات والاستقالات (تنرسل في روم الإمبد المحدد)
       if (interaction.commandName === 'send_leave_panel') {
         if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بالإدارة العليا (Administrator) فقط.', ephemeral: true });
@@ -699,7 +690,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
       }
 
-      // أمر التوب 10
       if (interaction.commandName === 'top_done') {
         if (doneCounts.size === 0) return interaction.reply({ content: '📊 ما فيه أي إحصائيات مسجلة حتى الآن.', ephemeral: true });
 
@@ -722,7 +712,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [embed] });
       }
 
-      // أمر عرض جميع الدنات
       if (interaction.commandName === 'all_dones') {
         if (doneCounts.size === 0) return interaction.reply({ content: '📊 ما فيه أي إحصائيات مسجلة حتى الآن.', ephemeral: true });
 
@@ -743,7 +732,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [embed] });
       }
 
-      // أمر إضافة الـ Done
       if (interaction.commandName === 'add_done') {
         if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بالإدارة العليا (Administrator) فقط.', ephemeral: true });
@@ -765,7 +753,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
       }
 
-      // أمر خصم الـ Done
       if (interaction.commandName === 'remove_done') {
         if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بالإدارة العليا (Administrator) فقط.', ephemeral: true });
@@ -787,7 +774,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
       }
 
-      // أمر تصفير جميع الإحصائيات
       if (interaction.commandName === 'reset_all') {
         if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بالإدارة العليا (Administrator) فقط.', ephemeral: true });
