@@ -887,7 +887,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         const embed = new EmbedBuilder()
-          .setTitle('🌴 قائمة الإجازات النشطة')
+          .setTitle(' قائمة الإجازات النشطة')
           .setColor(0x3ba55d)
           .setDescription(description)
           .setTimestamp();
