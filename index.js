@@ -63,6 +63,25 @@ function saveDoneCounts() {
 const doneCounts = loadDoneCounts();
 const activeSessions = new Map();
 
+// ===== نظام حفظ الإجازات النشطة =====
+const LEAVES_FILE = path.join(__dirname, 'active_leaves.json');
+
+function loadActiveLeaves() {
+  try {
+    const raw = fs.readFileSync(LEAVES_FILE, 'utf8');
+    return new Map(Object.entries(JSON.parse(raw)));
+  } catch (err) {
+    return new Map();
+  }
+}
+
+function saveActiveLeaves() {
+  const obj = Object.fromEntries(activeLeaves);
+  fs.writeFileSync(LEAVES_FILE, JSON.stringify(obj, null, 2), 'utf8');
+}
+
+const activeLeaves = loadActiveLeaves();
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -196,6 +215,10 @@ client.once(Events.ClientReady, async (c) => {
       {
         name: 'send_leave_panel',
         description: 'إرسال لوحة طلبات الإجازات والاستقالات في روم الإجازات المخصص (للإدارة فقط)'
+      },
+      {
+        name: 'active_leaves',
+        description: 'عرض قائمة بالإداريين المجازين حالياً والوقت المتبقي لانتهاء إجازتهم (للإدارة فقط)'
       }
     ];
 
@@ -471,6 +494,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
             if (reqType === 'leave') {
               await targetMember.roles.add(LEAVE_ROLE_ID, 'قبول طلب إجازة');
               roleActionNote = `\n🏷️ تم إعطاؤك رتبة <@&${LEAVE_ROLE_ID}> تلقائيًا.`;
+              
+              // استخراج عدد الأيام من الإمبد الأصلي وحفظها في قائمة الإجازات النشطة
+              const durationField = originalEmbed.data.fields.find(f => f.name.includes('المدة'));
+              if (durationField) {
+                const match = durationField.value.match(/\d+/);
+                if (match) {
+                  const durationDays = parseInt(match[0]);
+                  const endDate = Date.now() + (durationDays * 24 * 60 * 60 * 1000);
+                  activeLeaves.set(requesterId, { endDate });
+                  saveActiveLeaves();
+                }
+              }
+
             } else if (reqType === 'resign') {
               await targetMember.roles.set([RESIGNATION_KEEP_ROLE_ID], 'قبول طلب استقالة');
               roleActionNote = `\n🏷️ تم سحب جميع رتبك ما عدا <@&${RESIGNATION_KEEP_ROLE_ID}>.`;
@@ -478,6 +514,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
               if (targetMember.roles.cache.has(LEAVE_ROLE_ID)) {
                 await targetMember.roles.remove(LEAVE_ROLE_ID, 'قبول طلب كسر إجازة');
                 roleActionNote = `\n🏷️ تم سحب رتبة <@&${LEAVE_ROLE_ID}> منك (العودة من الإجازة).`;
+              }
+              // إزالة الشخص من قائمة المجازين النشطين بمجرد الموافقة على الكسر
+              if (activeLeaves.has(requesterId)) {
+                activeLeaves.delete(requesterId);
+                saveActiveLeaves();
               }
             }
           } catch (roleErr) {
@@ -802,6 +843,56 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({
           content: '⚠️ ✅ **تم تصفير جميع إحصائيات الـ Done لجميع الإداريين بنجاح.**'
         });
+      }
+
+      if (interaction.commandName === 'active_leaves') {
+        if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+          return interaction.reply({ content: '❌ هذا الأمر خاص بالإدارة العليا (Administrator) فقط.', ephemeral: true });
+        }
+
+        if (activeLeaves.size === 0) {
+          return interaction.reply({ content: '🌴 لا يوجد أي إداري في إجازة حالياً.', ephemeral: true });
+        }
+
+        let expiredCount = 0;
+        const now = Date.now();
+        let description = '';
+        let index = 1;
+
+        for (const [userId, leaveData] of activeLeaves.entries()) {
+          if (now > leaveData.endDate) {
+            // الإجازة انتهت وقتها
+            activeLeaves.delete(userId);
+            expiredCount++;
+            continue;
+          }
+
+          const remainingMs = leaveData.endDate - now;
+          const remainingDays = Math.floor(remainingMs / (1000 * 60 * 60 * 24));
+          const remainingHours = Math.floor((remainingMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+
+          let timeText = '';
+          if (remainingDays > 0) timeText += `${remainingDays} يوم و `;
+          timeText += `${remainingHours} ساعة`;
+
+          description += `**${index}.** <@${userId}> — ينتهي بعد: \`${timeText}\`\n`;
+          index++;
+        }
+
+        // تحديث الملف إذا كان فيه إجازات انتهت وتم تنظيفها
+        if (expiredCount > 0) saveActiveLeaves();
+
+        if (description === '') {
+          description = '✅ كانت هناك إجازات في السجل ولكن جميعها انتهت الآن.';
+        }
+
+        const embed = new EmbedBuilder()
+          .setTitle('🌴 قائمة الإجازات النشطة')
+          .setColor(0x3ba55d)
+          .setDescription(description)
+          .setTimestamp();
+
+        return interaction.reply({ embeds: [embed] });
       }
     }
 
