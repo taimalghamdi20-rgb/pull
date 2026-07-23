@@ -1,7 +1,7 @@
 {
   "name": "pull-citizens-bot",
   "version": "1.0.0",
-  "description": "بوت يسحب المواطنين من روم الانتظار إلى روم الإداري تلقائيًا مع نظام حفظ متقدم",
+  "description": "بوت يسحب المواطنين تلقائياً مع نظام تقييم وإجازات",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
@@ -10,6 +10,6 @@
   "dependencies": {
     "discord.js": "^14.15.3",
     "dotenv": "^16.4.5",
-    "better-sqlite3": "^9.4.3"
+    "better-sqlite3": "^11.0.0"
   }
 }
