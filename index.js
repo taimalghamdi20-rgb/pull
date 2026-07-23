@@ -65,15 +65,6 @@ function ratingLabel(rating) {
   return labels[rating] || '';
 }
 
-// ===== صور النجوم حسب التقييم (star_1.png ... star_5.png بجذر المشروع) =====
-function ratingImageFilename(rating) {
-  return `star_${rating}.png`;
-}
-
-function ratingImagePath(rating) {
-  return path.join(__dirname, ratingImageFilename(rating));
-}
-
 const MAX_LEAVE_DAYS = 10; // الحد الأقصى لأيام الإجازة
 const LEAVE_PANEL_COLOR = 0xC2410C; // برتقالي غامق
 const LEAVE_BANNER_PATH = path.join(__dirname, 'leave_banner.png');
@@ -303,28 +294,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const guild = client.guilds.cache.get(GUILD_ID);
           const ratingChannel = guild.channels.cache.get(RATING_CHANNEL_ID);
           if (ratingChannel) {
-            const starImageFile = new AttachmentBuilder(ratingImagePath(rating), {
-              name: ratingImageFilename(rating),
-            });
-
             const ratingEmbed = new EmbedBuilder()
               .setColor(ratingColor(rating))
               .setAuthor({
                 name: `${interaction.user.username} قيّم الخدمة`,
                 iconURL: interaction.user.displayAvatarURL({ dynamic: true })
               })
-              .setTitle('🌟 تقييم خدمة جديد')
+              .setTitle('🌟 تقييم إداري جديد')
               .addFields(
                 { name: '👤 المواطن', value: `<@${interaction.user.id}>`, inline: true },
                 { name: '🛡️ الإداري', value: adminId ? `<@${adminId}>` : 'غير معروف', inline: true },
                 { name: '\u200b', value: '\u200b', inline: false },
-                { name: '⭐ التقييم', value: `\`${rating}/5\` — **${ratingLabel(rating)}**`, inline: false }
+                { name: '⭐ التقييم', value: `${stars}\n\`${rating}/5\` — **${ratingLabel(rating)}**`, inline: false }
               )
-              .setImage(`attachment://${ratingImageFilename(rating)}`)
               .setFooter({ text: 'نظام تقييم الخدمة' })
               .setTimestamp();
 
-            await ratingChannel.send({ embeds: [ratingEmbed], files: [starImageFile] });
+            await ratingChannel.send({ embeds: [ratingEmbed] });
           }
         } catch (e) {
           console.error('❌ خطأ أثناء معالجة وإرسال التقييم:', e);
