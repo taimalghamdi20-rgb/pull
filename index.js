@@ -48,6 +48,22 @@ const STAFF_ROLE_ID = '1459304407899443396'; // الرتبة الوحيدة ال
 function hasStaffRole(member) {
   return member.roles.cache.has(STAFF_ROLE_ID);
 }
+
+function ratingStarsBar(rating) {
+  const filled = '⭐'.repeat(rating);
+  const empty = '☆'.repeat(5 - rating);
+  return filled + empty;
+}
+
+function ratingColor(rating) {
+  const colors = { 1: 0xed4245, 2: 0xf1a10c, 3: 0xfee75c, 4: 0x57f287, 5: 0x2ecc71 };
+  return colors[rating] || 0xffd700;
+}
+
+function ratingLabel(rating) {
+  const labels = { 1: 'ضعيف جدًا', 2: 'ضعيف', 3: 'متوسط', 4: 'جيد', 5: 'ممتاز' };
+  return labels[rating] || '';
+}
 const MAX_LEAVE_DAYS = 10; // الحد الأقصى لأيام الإجازة
 const LEAVE_PANEL_COLOR = 0xC2410C; // برتقالي غامق
 const LEAVE_BANNER_PATH = path.join(__dirname, 'leave_banner.png');
@@ -267,9 +283,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // 0. أزرار تقييم الإداري
       if (interaction.customId.startsWith('rate_')) {
         const parts = interaction.customId.split('_');
-        const rating = parts[1];
+        const rating = parseInt(parts[1]);
         const adminId = parts[2];
-        const stars = '⭐'.repeat(parseInt(rating));
+        const stars = ratingStarsBar(rating);
 
         await interaction.update({ content: `✅ شكراً لتقييمك! (أعطيت ${stars})`, embeds: [], components: [] });
 
@@ -278,14 +294,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const ratingChannel = guild.channels.cache.get(RATING_CHANNEL_ID);
           if (ratingChannel) {
             const ratingEmbed = new EmbedBuilder()
-              .setColor(0xffd700)
+              .setColor(ratingColor(rating))
+              .setAuthor({
+                name: `${interaction.user.username} قيّم الخدمة`,
+                iconURL: interaction.user.displayAvatarURL({ dynamic: true })
+              })
               .setTitle('🌟 تقييم خدمة جديد')
-              .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true }))
               .addFields(
                 { name: '👤 المواطن', value: `<@${interaction.user.id}>`, inline: true },
                 { name: '🛡️ الإداري', value: adminId ? `<@${adminId}>` : 'غير معروف', inline: true },
-                { name: '⭐ التقييم', value: stars, inline: false }
+                { name: '\u200b', value: '\u200b', inline: false },
+                { name: '⭐ التقييم', value: `${stars}\n\`${rating}/5\` — **${ratingLabel(rating)}**`, inline: false }
               )
+              .setFooter({ text: 'نظام تقييم الخدمة' })
               .setTimestamp();
 
             await ratingChannel.send({ embeds: [ratingEmbed] });
