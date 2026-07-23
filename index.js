@@ -47,6 +47,22 @@ const RESIGNATION_KEEP_ROLE_ID = '1476796533168017428'; // الرتبة الوح
 const STAFF_ROLE_IDS = ['1459304407899443396', '1459304410923532481']; // الرتب المسموح لها تستخدم أوامر البوت
 const DONE_TEXT_CHANNEL_ID = '1476746882993623150'; // الروم اللي ترسل فيه سجلات الـ Done
 
+// 🎯 قائمة رومات الإداريين المسموح للبوت يسحب المواطنين لها حصراً — أي روم غير هذي القائمة ما ينسحب له أحد
+const ADMIN_ROOM_IDS = [
+  '1499105265272754246',
+  '1499105221383819497',
+  '1499105170716491806',
+  '1525972362246226041',
+  '1499105092933128212',
+  '1499084679083720805',
+  '1499352796435058848',
+  '1499352980120403989',
+  '1499353050907938916',
+  '1499352946301730899',
+  '1519516030899191809',
+  '1519516058682130632',
+];
+
 function hasStaffRole(member) {
   return STAFF_ROLE_IDS.some((roleId) => member.roles.cache.has(roleId));
 }
@@ -183,9 +199,9 @@ function getNextEligibleWaitingMember(guild) {
 
 function isFreeAdminRoom(channel) {
   if (!channel || channel.type !== 2) return false;
-  if (ADMIN_CATEGORY_ID && channel.parentId !== ADMIN_CATEGORY_ID) return false;
-  if (WAITING_CHANNEL_IDS.includes(channel.id)) return false;
-  if (DONE_VOICE_CHANNEL_ID && channel.id === DONE_VOICE_CHANNEL_ID) return false;
+
+  // 🎯 السحب مسموح فقط لهذي الرومات المحددة — أي روم ثاني يترفض فورًا حتى لو داخل نفس الكاتاقوري
+  if (!ADMIN_ROOM_IDS.includes(channel.id)) return false;
 
   const members = [...channel.members.values()];
   if (members.length !== 1) return false;
@@ -198,9 +214,9 @@ function isFreeAdminRoom(channel) {
 }
 
 async function tryPullForAllFreeAdmins(guild) {
-  const voiceChannels = guild.channels.cache.filter((c) => c.type === 2);
-
-  for (const [, channel] of voiceChannels) {
+  for (const roomId of ADMIN_ROOM_IDS) {
+    const channel = guild.channels.cache.get(roomId);
+    if (!channel) continue;
     if (!isFreeAdminRoom(channel)) continue;
     if (pullLocks.has(channel.id)) continue;
 
