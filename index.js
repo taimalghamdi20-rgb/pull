@@ -1,6 +1,7 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
+const Database = require('better-sqlite3');
 const {
   Client,
   GatewayIntentBits,
@@ -16,35 +17,33 @@ const {
   AttachmentBuilder,
 } = require('discord.js');
 
+// ===== قراءة المتغيرات البيئية =====
 const {
   BOT_TOKEN,
   GUILD_ID,
   WAITING_CHANNEL_ID,
   ADMIN_ROLE_ID,
-  ADMIN_CATEGORY_ID,
   CITIZEN_ROLE_ID,
-  DONE_VOICE_CHANNEL_ID,
+  REQUESTS_CHANNEL_ID,
 } = process.env;
 
 if (!BOT_TOKEN || !GUILD_ID || !WAITING_CHANNEL_ID || !ADMIN_ROLE_ID) {
-  console.error('❌ تأكد من تعبئة جميع المتغيرات في ملف .env');
+  console.error('❌ تأكد من تعبئة جميع المتغيرات في ملف .env أو لوحة التحكم');
   process.exit(1);
 }
 
-// ===== إضافة رومات الانتظار الجديدة بشكل ثابت =====
+// ===== إضافة رومات الانتظار الجديدة =====
 const ADDITIONAL_WAITING_IDS = [
   '1481398869463138604',
   '1519511668823167116'
 ];
 
-// دمج الرومات من المتغير البيئي مع الرومات الثابتة
 const WAITING_CHANNEL_IDS = [
   ...WAITING_CHANNEL_ID.split(',').map(id => id.trim()).filter(Boolean),
   ...ADDITIONAL_WAITING_IDS
 ];
 
-// ===== إعدادات عامة =====
-// تم إلغاء استخدام CITIZEN_ALLOWED_CATEGORY_ID لأننا لم نعد نتحقق من الكاتاقوري
+// ===== إعدادات ثابتة (يمكن نقلها إلى .env لاحقاً) =====
 const RATING_CHANNEL_ID = '1529482677516898555';
 const LEAVE_EMBED_CHANNEL_ID = '1529495796247167178';
 const LEAVE_PANEL_CHANNEL_ID = '1529440458030321714';
@@ -68,31 +67,75 @@ const ADMIN_ROOM_IDS = [
   '1519516058682130632',
 ];
 
-function hasStaffRole(member) {
-  return STAFF_ROLE_IDS.some((roleId) => member.roles.cache.has(roleId));
-}
+// ===== قاعدة البيانات (SQLite) =====
+const db = new Database('data.db');
 
-// ===== نظام حفظ إحصائيات الـ Done =====
-const DONE_FILE = path.join(__dirname, 'done_stats.json');
+db.exec(`
+  CREATE TABLE IF NOT EXISTS done_counts (
+    admin_id TEXT PRIMARY KEY,
+    count INTEGER DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS active_leaves (
+    user_id TEXT PRIMARY KEY,
+    end_date INTEGER
+  );
+`);
 
+// ===== دوال حفظ واسترجاع الـ Done =====
 function loadDoneCounts() {
-  try {
-    const raw = fs.readFileSync(DONE_FILE, 'utf8');
-    return new Map(Object.entries(JSON.parse(raw)));
-  } catch (err) {
-    return new Map();
+  const stmt = db.prepare('SELECT admin_id, count FROM done_counts');
+  const rows = stmt.all();
+  const map = new Map();
+  for (const row of rows) {
+    map.set(row.admin_id, row.count);
   }
+  return map;
 }
 
 function saveDoneCounts() {
-  const obj = Object.fromEntries(doneCounts);
-  fs.writeFileSync(DONE_FILE, JSON.stringify(obj, null, 2), 'utf8');
+  db.prepare('DELETE FROM done_counts').run();
+  const insert = db.prepare('INSERT INTO done_counts (admin_id, count) VALUES (?, ?)');
+  const trans = db.transaction((entries) => {
+    for (const [id, count] of entries) {
+      insert.run(id, count);
+    }
+  });
+  trans(doneCounts.entries());
 }
 
+// ===== دوال حفظ واسترجاع الإجازات النشطة =====
+function loadActiveLeaves() {
+  const stmt = db.prepare('SELECT user_id, end_date FROM active_leaves');
+  const rows = stmt.all();
+  const map = new Map();
+  for (const row of rows) {
+    map.set(row.user_id, { endDate: row.end_date });
+  }
+  return map;
+}
+
+function saveActiveLeaves() {
+  db.prepare('DELETE FROM active_leaves').run();
+  const insert = db.prepare('INSERT INTO active_leaves (user_id, end_date) VALUES (?, ?)');
+  const trans = db.transaction((entries) => {
+    for (const [userId, data] of entries) {
+      insert.run(userId, data.endDate);
+    }
+  });
+  trans(activeLeaves.entries());
+}
+
+// ===== تحميل البيانات =====
 const doneCounts = loadDoneCounts();
+const activeLeaves = loadActiveLeaves();
 
 // ===== نظام منع التقييم المتكرر =====
-const evaluatedLogs = new Set(); // يحفظ معرفات سجلات الـ Done التي تم تقييمها
+const evaluatedLogs = new Set();
+
+// ===== دوال مساعدة =====
+function hasStaffRole(member) {
+  return STAFF_ROLE_IDS.some((roleId) => member.roles.cache.has(roleId));
+}
 
 function ratingStarsBar(rating) {
   const filled = '⭐'.repeat(rating);
@@ -111,65 +154,6 @@ function ratingLabel(rating) {
   return labels[rating] || '';
 }
 
-const MAX_LEAVE_DAYS = 14;
-const LEAVE_PANEL_COLOR = 0xC2410C;
-const LEAVE_BANNER_PATH = path.join(__dirname, 'leave_banner.png');
-const LEAVE_BANNER_FILENAME = 'leave_banner.png';
-const SERVER_LOGO_PATH = path.join(__dirname, 'server_logo.png');
-const SERVER_LOGO_FILENAME = 'server_logo.png';
-
-// ===== نظام حفظ الإجازات النشطة =====
-const LEAVES_FILE = path.join(__dirname, 'active_leaves.json');
-
-function loadActiveLeaves() {
-  try {
-    const raw = fs.readFileSync(LEAVES_FILE, 'utf8');
-    return new Map(Object.entries(JSON.parse(raw)));
-  } catch (err) {
-    return new Map();
-  }
-}
-
-function saveActiveLeaves() {
-  const obj = Object.fromEntries(activeLeaves);
-  fs.writeFileSync(LEAVES_FILE, JSON.stringify(obj, null, 2), 'utf8');
-}
-
-const activeLeaves = loadActiveLeaves();
-
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildVoiceStates,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-  ],
-});
-
-const pullLocks = new Set();
-const activeSessions = new Map();
-
-// ============================================================
-// حماية روم الإجازات
-// ============================================================
-client.on(Events.MessageCreate, async (message) => {
-  if (message.guild && message.channelId === LEAVE_EMBED_CHANNEL_ID) {
-    if (message.author.bot) return;
-    const isAdmin = message.member && hasStaffRole(message.member);
-    if (!isAdmin) {
-      try {
-        await message.delete();
-      } catch (err) {
-        console.error('❌ فشل حذف رسالة العضو في روم الإجازات:', err);
-      }
-    }
-  }
-});
-
-// ============================================================
-// دوال مساعدة لنظام السحب (تم تعديلها)
-// ============================================================
 function isMutedOrDeafened(voiceState) {
   if (!voiceState) return false;
   return (
@@ -185,7 +169,7 @@ function isDeafened(voiceState) {
   return voiceState.selfDeaf || voiceState.serverDeaf;
 }
 
-// 🔥 دالة البحث عن مواطن في رومات الانتظار - بدون أي شرط رتبة أو كاتاقوري
+// ===== دوال السحب =====
 function getNextEligibleWaitingMember(guild) {
   for (const waitingId of WAITING_CHANNEL_IDS) {
     const waitingChannel = guild.channels.cache.get(waitingId);
@@ -193,7 +177,6 @@ function getNextEligibleWaitingMember(guild) {
 
     for (const [, member] of waitingChannel.members) {
       const vs = member.voice;
-      // لا نتحقق من رتبة المواطن ولا من الكاتاقوري
       if (!isMutedOrDeafened(vs)) {
         return member;
       }
@@ -216,6 +199,47 @@ function isFreeAdminRoom(channel) {
   return true;
 }
 
+// ===== المتغيرات العامة =====
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
+});
+
+const pullLocks = new Set();
+const activeSessions = new Map();
+
+const MAX_LEAVE_DAYS = 14;
+const LEAVE_PANEL_COLOR = 0xC2410C;
+const LEAVE_BANNER_PATH = path.join(__dirname, 'leave_banner.png');
+const LEAVE_BANNER_FILENAME = 'leave_banner.png';
+const SERVER_LOGO_PATH = path.join(__dirname, 'server_logo.png');
+const SERVER_LOGO_FILENAME = 'server_logo.png';
+
+// ============================================================
+// حماية روم الإجازات
+// ============================================================
+client.on(Events.MessageCreate, async (message) => {
+  if (message.guild && message.channelId === LEAVE_EMBED_CHANNEL_ID) {
+    if (message.author.bot) return;
+    const isAdmin = message.member && hasStaffRole(message.member);
+    if (!isAdmin) {
+      try {
+        await message.delete();
+      } catch (err) {
+        console.error('❌ فشل حذف رسالة العضو في روم الإجازات:', err);
+      }
+    }
+  }
+});
+
+// ============================================================
+// السحب التلقائي
+// ============================================================
 async function tryPullForAllFreeAdmins(guild) {
   for (const roomId of ADMIN_ROOM_IDS) {
     const channel = guild.channels.cache.get(roomId);
@@ -230,13 +254,10 @@ async function tryPullForAllFreeAdmins(guild) {
     try {
       const adminMember = channel.members.first();
       await candidate.voice.setChannel(channel.id, 'سحب تلقائي لمواطن إلى إداري فاضي');
-
-      // تخزين الجلسة لضمان تسجيل الـ Done عند الخروج
       activeSessions.set(candidate.id, {
         adminId: adminMember.id,
         startTime: Date.now()
       });
-
       console.log(`✅ تم سحب ${candidate.user.tag} إلى ${channel.name} (الإداري: ${adminMember.user.tag})`);
     } catch (err) {
       console.error(`⚠️ فشل سحب ${candidate.user.tag}:`, err.message);
@@ -294,7 +315,7 @@ client.once(Events.ClientReady, async (c) => {
 });
 
 // ============================================================
-// حركة الصوت (السحب التلقائي وتسجيل الـ Done)
+// حركة الصوت
 // ============================================================
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const guild = newState.guild || oldState.guild;
@@ -302,20 +323,17 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
   const citizenId = newState.id;
 
-  // 🔍 التحقق من خروج المواطن من روم الإداري (إنهاء الجلسة)
   if (activeSessions.has(citizenId) && newState.channelId !== oldState.channelId) {
     const { adminId, startTime } = activeSessions.get(citizenId);
     activeSessions.delete(citizenId);
 
     const durationSec = Math.floor((Date.now() - startTime) / 1000);
 
-    // تسجيل الـ Done فقط إذا كانت المدة 5 ثوانٍ على الأقل (لتجنب الإنهاء الفوري)
     if (durationSec >= 5) {
       const minutes = Math.floor(durationSec / 60);
       const seconds = durationSec % 60;
       const durationText = minutes > 0 ? `${minutes} دقيقة و ${seconds} ثانية` : `${seconds} ثانية`;
 
-      // تحديث إحصائيات الـ Done
       const currentCount = (doneCounts.get(adminId) || 0) + 1;
       doneCounts.set(adminId, currentCount);
       saveDoneCounts();
@@ -342,7 +360,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         console.error('❌ خطأ أثناء إرسال سجل الـ Done:', err);
       }
 
-      // إرسال رسالة خاصة للمواطن للتقييم
       try {
         const citizenUser = client.users.cache.get(citizenId) || await client.users.fetch(citizenId);
         const logMsgId = logMessage ? logMessage.id : 'none';
@@ -377,7 +394,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  // محاولة السحب التلقائي بعد أي تغيير في الصوت
   try {
     await tryPullForAllFreeAdmins(guild);
   } catch (err) {
@@ -386,17 +402,17 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 });
 
 // ============================================================
-// الأوامر، الأزرار، والـ Modals (تم تعديل معالجة التقييم)
+// معالجة التفاعلات (أزرار، مودالات، أوامر)
 // ============================================================
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
 
     // --------------------------------------------------------
-    // التعامل مع الأزرار
+    // الأزرار
     // --------------------------------------------------------
     if (interaction.isButton()) {
 
-      // 0. أزرار تقييم الإداري (مع منع التقييم المتكرر)
+      // تقييم الإداري (مع منع التقييم المتكرر)
       if (interaction.customId.startsWith('rate_')) {
         const parts = interaction.customId.split('_');
         const rating = parseInt(parts[1]);
@@ -404,7 +420,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const logMsgId = parts[3];
         const stars = ratingStarsBar(rating);
 
-        // 🔒 التحقق من أن هذا السجل لم يُقيّم مسبقاً
         if (evaluatedLogs.has(logMsgId)) {
           return interaction.reply({
             content: '⚠️ تم تقييم هذه الخدمة مسبقاً، شكراً لك!',
@@ -412,7 +427,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
         }
 
-        // إضافة السجل إلى قائمة المُقيّمين
         evaluatedLogs.add(logMsgId);
 
         await interaction.update({ content: `✅ شكراً لتقييمك! (أعطيت ${stars})`, embeds: [], components: [] });
@@ -446,7 +460,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           console.error('❌ خطأ أثناء معالجة وإرسال التقييم:', e);
         }
 
-        // تحديث سجل الـ Done بنفس التقييم
         try {
           if (logMsgId && logMsgId !== 'none') {
             const guild = client.guilds.cache.get(GUILD_ID);
@@ -468,7 +481,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      // 1. زر فتح نموذج طلب الإجازة
+      // طلب إجازة
       if (interaction.customId === 'open_leave_modal') {
         const modal = new ModalBuilder()
           .setCustomId('leave_modal')
@@ -499,7 +512,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      // 2. زر فتح نموذج طلب الاستقالة
+      // طلب استقالة
       if (interaction.customId === 'open_resign_modal') {
         const modal = new ModalBuilder()
           .setCustomId('resign_modal')
@@ -519,7 +532,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      // 2.5 زر فتح نموذج طلب كسر الإجازة
+      // طلب كسر إجازة
       if (interaction.customId === 'open_break_modal') {
         const modal = new ModalBuilder()
           .setCustomId('break_modal')
@@ -539,7 +552,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      // 3. أزرار قبول/رفض طلب إجازة أو استقالة
+      // قبول/رفض طلبات الإجازات والاستقالات
       if (interaction.customId.startsWith('req_accept_') || interaction.customId.startsWith('req_reject_')) {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({
@@ -644,10 +657,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     // --------------------------------------------------------
-    // التعامل مع إرسال النماذج (Modals)
+    // المودالات
     // --------------------------------------------------------
     if (interaction.isModalSubmit()) {
-      const requestsChannel = await interaction.guild.channels.fetch(LEAVE_PANEL_CHANNEL_ID);
+      const requestsChannel = await interaction.guild.channels.fetch(REQUESTS_CHANNEL_ID);
 
       const buildApplicationEmbed = (typeTitle, fieldsData) => {
         return new EmbedBuilder()
@@ -762,7 +775,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     // --------------------------------------------------------
-    // التعامل مع الأوامر (Slash Commands)
+    // أوامر سلاش
     // --------------------------------------------------------
     if (interaction.isChatInputCommand()) {
 
@@ -872,7 +885,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [embed] });
       }
 
-      // أمر التوب 10
       if (interaction.commandName === 'top_done') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة فقط.', ephemeral: true });
@@ -897,7 +909,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [embed] });
       }
 
-      // أمر عرض الكل
       if (interaction.commandName === 'all_dones') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة فقط.', ephemeral: true });
@@ -918,7 +929,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [embed] });
       }
 
-      // إضافة إنجازات
       if (interaction.commandName === 'add_done') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة العليا فقط.', ephemeral: true });
@@ -935,7 +945,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: `✅ تم إضافة \`${amount}\` إلى إحصائيات <@${admin.id}>. المجموع الحالي: \`${newCount}\``, ephemeral: true });
       }
 
-      // خصم إنجازات
       if (interaction.commandName === 'remove_done') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة العليا فقط.', ephemeral: true });
@@ -952,7 +961,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: `✅ تم خصم \`${amount}\` من إحصائيات <@${admin.id}>. المجموع الحالي: \`${newCount}\``, ephemeral: true });
       }
 
-      // تصفير الإحصائيات
       if (interaction.commandName === 'reset_all') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة العليا فقط.', ephemeral: true });
@@ -972,4 +980,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
+// ============================================================
+// تشغيل البوت
+// ============================================================
 client.login(BOT_TOKEN);
