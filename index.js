@@ -511,6 +511,206 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         const embed = buildApplicationEmbed('طلب إجازة', [
-          { name: 'المدة', value: `\`\`\`\n${duration}${duration === 1 ? 'يوم' : 'أيام'}\n\`\`\`` },
+          { name: 'المدة', value: `\`\`\`\n${duration} ${duration === 1 ? 'يوم' : 'أيام'}\n\`\`\`` },
           { name: 'سبب الإجازة', value: `\`\`\`\n${reason}\n\`\`\`` },
-          { name: 'الحالة', value: '
+          { name: 'الحالة', value: `\`\`\`\n⏳ بانتظار مراجعة الإدارة\n\`\`\`` }
+        ]);
+
+        const decisionRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`req_accept_leave_${interaction.user.id}`)
+            .setLabel('قبول')
+            .setStyle(ButtonStyle.Success),
+          new ButtonBuilder()
+            .setCustomId(`req_reject_leave_${interaction.user.id}`)
+            .setLabel('رفض')
+            .setStyle(ButtonStyle.Danger)
+        );
+
+        await requestsChannel.send({ embeds: [embed], components: [decisionRow] });
+
+        return await interaction.reply({
+          content: '✅ تم إرسال طلب الإجازة بنجاح إلى روم المسؤولين، بانتظار مراجعة الإدارة.',
+          ephemeral: true,
+        });
+      }
+
+      if (interaction.customId === 'resign_modal') {
+        const reason = interaction.fields.getTextInputValue('resign_reason').trim();
+
+        const embed = buildApplicationEmbed('طلب استقالة', [
+          { name: 'سبب الاستقالة', value: `\`\`\`\n${reason}\n\`\`\`` },
+          { name: 'الحالة', value: `\`\`\`\n⏳ بانتظار مراجعة الإدارة\n\`\`\`` }
+        ]);
+
+        const decisionRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`req_accept_resign_${interaction.user.id}`)
+            .setLabel('قبول')
+            .setStyle(ButtonStyle.Success),
+          new ButtonBuilder()
+            .setCustomId(`req_reject_resign_${interaction.user.id}`)
+            .setLabel('رفض')
+            .setStyle(ButtonStyle.Danger)
+        );
+
+        await requestsChannel.send({ embeds: [embed], components: [decisionRow] });
+
+        return await interaction.reply({
+          content: '✅ تم إرسال طلب الاستقالة بنجاح إلى روم المسؤولين، بانتظار مراجعة الإدارة.',
+          ephemeral: true,
+        });
+      }
+
+      if (interaction.customId === 'break_modal') {
+        const reason = interaction.fields.getTextInputValue('break_reason').trim();
+
+        const embed = buildApplicationEmbed('طلب كسر إجازة', [
+          { name: 'سبب كسر الإجازة', value: `\`\`\`\n${reason}\n\`\`\`` },
+          { name: 'الحالة', value: `\`\`\`\n⏳ بانتظار مراجعة الإدارة\n\`\`\`` }
+        ]);
+
+        const decisionRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`req_accept_break_${interaction.user.id}`)
+            .setLabel('قبول')
+            .setStyle(ButtonStyle.Success),
+          new ButtonBuilder()
+            .setCustomId(`req_reject_break_${interaction.user.id}`)
+            .setLabel('رفض')
+            .setStyle(ButtonStyle.Danger)
+        );
+
+        await requestsChannel.send({ embeds: [embed], components: [decisionRow] });
+
+        return await interaction.reply({
+          content: '✅ تم إرسال طلب كسر الإجازة بنجاح إلى روم المسؤولين، بانتظار مراجعة الإدارة.',
+          ephemeral: true,
+        });
+      }
+    }
+
+    // --------------------------------------------------------
+    // التعامل مع الأوامر (Slash Commands)
+    // --------------------------------------------------------
+    if (interaction.isChatInputCommand()) {
+
+      if (interaction.commandName === 'send_leave_panel') {
+        if (!hasStaffRole(interaction.member)) {
+          return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة فقط.', ephemeral: true });
+        }
+
+        const panelEmbed = new EmbedBuilder()
+          .setTitle('📋 نظام طلبات الإجازات والاستقالات')
+          .setDescription(
+            [
+              'اختر نوع الطلب اللي تبيه من الأزرار تحت:',
+              '',
+              `📄 **طلب إجازة** — لطلب إجازة (بحد أقصى ${MAX_LEAVE_DAYS} أيام) مع ذكر السبب.`,
+              '🔓 **طلب كسر إجازة** — إذا رجعت من إجازتك بدري وتبي توضح السبب.',
+              '📝 **طلب استقالة** — لتقديم طلب استقالة مع ذكر السبب.',
+            ].join('\n')
+          )
+          .setColor(LEAVE_PANEL_COLOR)
+          .setImage(`attachment://${LEAVE_BANNER_FILENAME}`)
+          .setFooter({ text: 'يرجى تعبئة البيانات بدقة قبل الإرسال' })
+          .setTimestamp();
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('open_leave_modal')
+            .setLabel('طلب إجازة')
+            .setEmoji('📄')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId('open_break_modal')
+            .setLabel('طلب كسر إجازة')
+            .setEmoji('🔓')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('open_resign_modal')
+            .setLabel('طلب استقالة')
+            .setEmoji('📝')
+            .setStyle(ButtonStyle.Danger)
+        );
+
+        const bannerFile = new AttachmentBuilder(LEAVE_BANNER_PATH, { name: LEAVE_BANNER_FILENAME });
+
+        try {
+          const panelChannel = await interaction.guild.channels.fetch(LEAVE_EMBED_CHANNEL_ID);
+          await panelChannel.send({ embeds: [panelEmbed], components: [row], files: [bannerFile] });
+
+          return interaction.reply({
+            content: `✅ تم إرسال لوحة الإجازات والاستقالات في روم الإمبد <#${LEAVE_EMBED_CHANNEL_ID}>.`,
+            ephemeral: true,
+          });
+        } catch (err) {
+          console.error('❌ خطأ أثناء إرسال لوحة الاجازات:', err);
+          return interaction.reply({
+            content: '⚠️ ما قدرت أرسل اللوحة. تأكد إن البوت عنده صلاحية إرسال رسائل وصور بذاك الروم.',
+            ephemeral: true,
+          });
+        }
+      }
+
+      if (interaction.commandName === 'active_leaves') {
+        if (!hasStaffRole(interaction.member)) {
+          return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة فقط.', ephemeral: true });
+        }
+
+        if (activeLeaves.size === 0) {
+          return interaction.reply({ content: '🌴 لا يوجد أي إداري في إجازة حالياً.', ephemeral: true });
+        }
+
+        let expiredCount = 0;
+        const now = Date.now();
+        let description = '';
+        let index = 1;
+
+        for (const [userId, leaveData] of activeLeaves.entries()) {
+          if (now > leaveData.endDate) {
+            activeLeaves.delete(userId);
+            expiredCount++;
+            continue;
+          }
+
+          const remainingMs = leaveData.endDate - now;
+          const remainingDays = Math.floor(remainingMs / (1000 * 60 * 60 * 24));
+          const remainingHours = Math.floor((remainingMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+
+          let timeText = '';
+          if (remainingDays > 0) timeText += `${remainingDays} يوم و `;
+          timeText += `${remainingHours} ساعة`;
+
+          description += `**${index}.** <@${userId}> — ينتهي بعد: \`${timeText}\`\n`;
+          index++;
+        }
+
+        if (expiredCount > 0) saveActiveLeaves();
+
+        if (description === '') {
+          description = '✅ كانت هناك إجازات في السجل ولكن جميعها انتهت الآن.';
+        }
+
+        const embed = new EmbedBuilder()
+          .setTitle(' قائمة الإجازات النشطة')
+          .setColor(0x3ba55d)
+          .setDescription(description)
+          .setTimestamp();
+
+        return interaction.reply({ embeds: [embed] });
+      }
+    }
+
+  } catch (err) {
+    console.error('⚠️ خطأ أثناء معالجة التفاعل:', err);
+    if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        content: '⚠️ صار خطأ غير متوقع، حاول مرة ثانية.',
+        ephemeral: true,
+      });
+    }
+  }
+});
+
+client.login(BOT_TOKEN);
