@@ -34,12 +34,12 @@ if (!BOT_TOKEN || !GUILD_ID || !WAITING_CHANNEL_ID || !ADMIN_ROLE_ID || !DONE_TE
 
 // ===== إعدادات عامة =====
 const RATING_CHANNEL_ID = '1529577728117047453'; // آيدي روم التقييمات المنفصل
-const LEAVE_EMBED_CHANNEL_ID = '1529581700663869500'; // روم إمبد الإجازات (ممنوع إرسال أي شي فيه إلا البوت)
-const LEAVE_PANEL_CHANNEL_ID = '1529582419248681111'; // روم المسؤولين (اللي تنرسل فيه طلبات الإجازات والاستقالات)
-const LEAVE_ROLE_ID = '1529635475655102625'; // الرتبة اللي تنعطى تلقائيًا عند قبول طلب الإجازة
-const RESIGNATION_KEEP_ROLE_ID = '1529504750003945632'; // الرتبة الوحيدة اللي تبقى عند قبول الاستقالة
+const LEAVE_EMBED_CHANNEL_ID = '1529581700663869500'; // روم إمبد الإجازات
+const LEAVE_PANEL_CHANNEL_ID = '1529582419248681111'; // روم المسؤولين
+const LEAVE_ROLE_ID = '1529635475655102625'; // الرتبة عند قبول الإجازة
+const RESIGNATION_KEEP_ROLE_ID = '1529504750003945632'; // الرتبة المتبقية عند قبول الاستقالة
 const MAX_LEAVE_DAYS = 10; // الحد الأقصى لأيام الإجازة
-const LEAVE_PANEL_COLOR = 0xC2410C; // برتقالي غامق لامبد لوحة الاجازات
+const LEAVE_PANEL_COLOR = 0xC2410C; // برتقالي غامق
 const LEAVE_BANNER_PATH = path.join(__dirname, 'leave_banner.png');
 const LEAVE_BANNER_FILENAME = 'leave_banner.png';
 
@@ -470,30 +470,47 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
             if (reqType === 'leave') {
               await targetMember.roles.add(LEAVE_ROLE_ID, 'قبول طلب إجازة');
-              roleActionNote = `\n🏷️ تم إعطاؤه رتبة <@&${LEAVE_ROLE_ID}> تلقائيًا.`;
+              roleActionNote = `\n🏷️ تم إعطاؤك رتبة <@&${LEAVE_ROLE_ID}> تلقائيًا.`;
             } else if (reqType === 'resign') {
               await targetMember.roles.set([RESIGNATION_KEEP_ROLE_ID], 'قبول طلب استقالة');
-              roleActionNote = `\n🏷️ تم سحب جميع رتبه ما عدا <@&${RESIGNATION_KEEP_ROLE_ID}>.`;
+              roleActionNote = `\n🏷️ تم سحب جميع رتبك ما عدا <@&${RESIGNATION_KEEP_ROLE_ID}>.`;
             } else if (reqType === 'break') {
               if (targetMember.roles.cache.has(LEAVE_ROLE_ID)) {
                 await targetMember.roles.remove(LEAVE_ROLE_ID, 'قبول طلب كسر إجازة');
-                roleActionNote = `\n🏷️ تم سحب رتبة <@&${LEAVE_ROLE_ID}> منه (رجع من إجازته).`;
+                roleActionNote = `\n🏷️ تم سحب رتبة <@&${LEAVE_ROLE_ID}> منك (العودة من الإجازة).`;
               }
             }
           } catch (roleErr) {
             console.error('⚠️ خطأ أثناء تعديل الرتب:', roleErr);
-            roleActionNote = '\n⚠️ ما قدر البوت يعدل الرتب (تأكد من صلاحية Manage Roles وترتيب رتبة البوت).';
           }
         }
 
+        // ============================================================
+        // إرسال Embed مخصص للخاص مطابق لتصميم الصورة
+        // ============================================================
         try {
           const requesterUser = await client.users.fetch(requesterId);
-          const typeLabels = { leave: 'الإجازة', resign: 'الاستقالة', break: 'كسر الإجازة' };
-          const typeLabel = typeLabels[reqType] || 'الطلب';
-          await requesterUser.send(
-            `📢 تم مراجعة طلب ${typeLabel} الخاص بك: **${decisionLabel}** بواسطة <@${interaction.user.id}>${roleActionNote}`
-          );
-        } catch (e) {}
+          const typeLabels = { leave: 'إجازة', resign: 'استقالة', break: 'كسر إجازة' };
+          const typeLabel = typeLabels[reqType] || 'إجازة';
+
+          const dmEmbed = new EmbedBuilder()
+            .setTitle(isAccept ? '🎉 تم قبول طلبك' : '❌ تم رفض طلبك')
+            .setColor(isAccept ? 0x2ecc71 : 0xe74c3c)
+            .setDescription(
+              isAccept 
+                ? `تهانينا! تم قبول طلب **الـ ${typeLabel}** الخاص بك.${roleActionNote}`
+                : `للأسف، تم رفض طلب **الـ ${typeLabel}** الخاص بك.`
+            )
+            .addFields(
+              { name: 'المسؤول', value: `<@${interaction.user.id}>`, inline: true },
+              { name: 'نوع الطلب', value: `طلب ${typeLabel}`, inline: true }
+            )
+            .setTimestamp();
+
+          await requesterUser.send({ embeds: [dmEmbed] });
+        } catch (e) {
+          console.error('⚠️ تعذر إرسال الرسالة لخاص العضو (قد تكون إعدادات الخصوصية مغلقة).');
+        }
         return;
       }
     }
