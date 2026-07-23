@@ -1,7 +1,6 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
-const Database = require('better-sqlite3');
 const {
   Client,
   GatewayIntentBits,
@@ -17,22 +16,39 @@ const {
   AttachmentBuilder,
 } = require('discord.js');
 
-// ===== قراءة المتغيرات البيئية =====
+// ===== قاعدة بيانات SQLite =====
+const Database = require('better-sqlite3');
+const db = new Database('data.db');
+
+// إنشاء الجداول إذا لم تكن موجودة
+db.exec(`
+  CREATE TABLE IF NOT EXISTS done_counts (
+    admin_id TEXT PRIMARY KEY,
+    count INTEGER DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS active_leaves (
+    user_id TEXT PRIMARY KEY,
+    end_date INTEGER
+  );
+`);
+
+// ===== المتغيرات البيئية =====
 const {
   BOT_TOKEN,
   GUILD_ID,
   WAITING_CHANNEL_ID,
   ADMIN_ROLE_ID,
+  ADMIN_CATEGORY_ID,
   CITIZEN_ROLE_ID,
-  REQUESTS_CHANNEL_ID,
+  DONE_VOICE_CHANNEL_ID,
 } = process.env;
 
 if (!BOT_TOKEN || !GUILD_ID || !WAITING_CHANNEL_ID || !ADMIN_ROLE_ID) {
-  console.error('❌ تأكد من تعبئة جميع المتغيرات في ملف .env أو لوحة التحكم');
+  console.error('❌ تأكد من تعبئة جميع المتغيرات في ملف .env');
   process.exit(1);
 }
 
-// ===== إضافة رومات الانتظار الجديدة =====
+// ===== إضافة رومات الانتظار الجديدة بشكل ثابت =====
 const ADDITIONAL_WAITING_IDS = [
   '1481398869463138604',
   '1519511668823167116'
@@ -43,7 +59,8 @@ const WAITING_CHANNEL_IDS = [
   ...ADDITIONAL_WAITING_IDS
 ];
 
-// ===== إعدادات ثابتة (يمكن نقلها إلى .env لاحقاً) =====
+// ===== إعدادات عامة =====
+// تم إلغاء استخدام CITIZEN_ALLOWED_CATEGORY_ID لأننا لم نعد نتحقق من الكاتاقوري
 const RATING_CHANNEL_ID = '1529482677516898555';
 const LEAVE_EMBED_CHANNEL_ID = '1529495796247167178';
 const LEAVE_PANEL_CHANNEL_ID = '1529440458030321714';
@@ -67,28 +84,16 @@ const ADMIN_ROOM_IDS = [
   '1519516058682130632',
 ];
 
-// ===== قاعدة البيانات (SQLite) =====
-const db = new Database('data.db');
+function hasStaffRole(member) {
+  return STAFF_ROLE_IDS.some((roleId) => member.roles.cache.has(roleId));
+}
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS done_counts (
-    admin_id TEXT PRIMARY KEY,
-    count INTEGER DEFAULT 0
-  );
-  CREATE TABLE IF NOT EXISTS active_leaves (
-    user_id TEXT PRIMARY KEY,
-    end_date INTEGER
-  );
-`);
-
-// ===== دوال حفظ واسترجاع الـ Done =====
+// ===== نظام حفظ إحصائيات الـ Done (باستخدام SQLite) =====
 function loadDoneCounts() {
   const stmt = db.prepare('SELECT admin_id, count FROM done_counts');
   const rows = stmt.all();
   const map = new Map();
-  for (const row of rows) {
-    map.set(row.admin_id, row.count);
-  }
+  for (const row of rows) map.set(row.admin_id, row.count);
   return map;
 }
 
@@ -96,46 +101,15 @@ function saveDoneCounts() {
   db.prepare('DELETE FROM done_counts').run();
   const insert = db.prepare('INSERT INTO done_counts (admin_id, count) VALUES (?, ?)');
   const trans = db.transaction((entries) => {
-    for (const [id, count] of entries) {
-      insert.run(id, count);
-    }
+    for (const [id, count] of entries) insert.run(id, count);
   });
   trans(doneCounts.entries());
 }
 
-// ===== دوال حفظ واسترجاع الإجازات النشطة =====
-function loadActiveLeaves() {
-  const stmt = db.prepare('SELECT user_id, end_date FROM active_leaves');
-  const rows = stmt.all();
-  const map = new Map();
-  for (const row of rows) {
-    map.set(row.user_id, { endDate: row.end_date });
-  }
-  return map;
-}
-
-function saveActiveLeaves() {
-  db.prepare('DELETE FROM active_leaves').run();
-  const insert = db.prepare('INSERT INTO active_leaves (user_id, end_date) VALUES (?, ?)');
-  const trans = db.transaction((entries) => {
-    for (const [userId, data] of entries) {
-      insert.run(userId, data.endDate);
-    }
-  });
-  trans(activeLeaves.entries());
-}
-
-// ===== تحميل البيانات =====
 const doneCounts = loadDoneCounts();
-const activeLeaves = loadActiveLeaves();
 
 // ===== نظام منع التقييم المتكرر =====
 const evaluatedLogs = new Set();
-
-// ===== دوال مساعدة =====
-function hasStaffRole(member) {
-  return STAFF_ROLE_IDS.some((roleId) => member.roles.cache.has(roleId));
-}
 
 function ratingStarsBar(rating) {
   const filled = '⭐'.repeat(rating);
@@ -154,6 +128,66 @@ function ratingLabel(rating) {
   return labels[rating] || '';
 }
 
+const MAX_LEAVE_DAYS = 14;
+const LEAVE_PANEL_COLOR = 0xC2410C;
+const LEAVE_BANNER_PATH = path.join(__dirname, 'leave_banner.png');
+const LEAVE_BANNER_FILENAME = 'leave_banner.png';
+const SERVER_LOGO_PATH = path.join(__dirname, 'server_logo.png');
+const SERVER_LOGO_FILENAME = 'server_logo.png';
+
+// ===== نظام حفظ الإجازات النشطة (باستخدام SQLite) =====
+function loadActiveLeaves() {
+  const stmt = db.prepare('SELECT user_id, end_date FROM active_leaves');
+  const rows = stmt.all();
+  const map = new Map();
+  for (const row of rows) map.set(row.user_id, { endDate: row.end_date });
+  return map;
+}
+
+function saveActiveLeaves() {
+  db.prepare('DELETE FROM active_leaves').run();
+  const insert = db.prepare('INSERT INTO active_leaves (user_id, end_date) VALUES (?, ?)');
+  const trans = db.transaction((entries) => {
+    for (const [userId, data] of entries) insert.run(userId, data.endDate);
+  });
+  trans(activeLeaves.entries());
+}
+
+const activeLeaves = loadActiveLeaves();
+
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
+});
+
+const pullLocks = new Set();
+const activeSessions = new Map();
+
+// ============================================================
+// حماية روم الإجازات
+// ============================================================
+client.on(Events.MessageCreate, async (message) => {
+  if (message.guild && message.channelId === LEAVE_EMBED_CHANNEL_ID) {
+    if (message.author.bot) return;
+    const isAdmin = message.member && hasStaffRole(message.member);
+    if (!isAdmin) {
+      try {
+        await message.delete();
+      } catch (err) {
+        console.error('❌ فشل حذف رسالة العضو في روم الإجازات:', err);
+      }
+    }
+  }
+});
+
+// ============================================================
+// دوال مساعدة لنظام السحب (تم تعديلها)
+// ============================================================
 function isMutedOrDeafened(voiceState) {
   if (!voiceState) return false;
   return (
@@ -169,7 +203,6 @@ function isDeafened(voiceState) {
   return voiceState.selfDeaf || voiceState.serverDeaf;
 }
 
-// ===== دوال السحب =====
 function getNextEligibleWaitingMember(guild) {
   for (const waitingId of WAITING_CHANNEL_IDS) {
     const waitingChannel = guild.channels.cache.get(waitingId);
@@ -199,47 +232,6 @@ function isFreeAdminRoom(channel) {
   return true;
 }
 
-// ===== المتغيرات العامة =====
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildVoiceStates,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-  ],
-});
-
-const pullLocks = new Set();
-const activeSessions = new Map();
-
-const MAX_LEAVE_DAYS = 14;
-const LEAVE_PANEL_COLOR = 0xC2410C;
-const LEAVE_BANNER_PATH = path.join(__dirname, 'leave_banner.png');
-const LEAVE_BANNER_FILENAME = 'leave_banner.png';
-const SERVER_LOGO_PATH = path.join(__dirname, 'server_logo.png');
-const SERVER_LOGO_FILENAME = 'server_logo.png';
-
-// ============================================================
-// حماية روم الإجازات
-// ============================================================
-client.on(Events.MessageCreate, async (message) => {
-  if (message.guild && message.channelId === LEAVE_EMBED_CHANNEL_ID) {
-    if (message.author.bot) return;
-    const isAdmin = message.member && hasStaffRole(message.member);
-    if (!isAdmin) {
-      try {
-        await message.delete();
-      } catch (err) {
-        console.error('❌ فشل حذف رسالة العضو في روم الإجازات:', err);
-      }
-    }
-  }
-});
-
-// ============================================================
-// السحب التلقائي
-// ============================================================
 async function tryPullForAllFreeAdmins(guild) {
   for (const roomId of ADMIN_ROOM_IDS) {
     const channel = guild.channels.cache.get(roomId);
@@ -254,10 +246,12 @@ async function tryPullForAllFreeAdmins(guild) {
     try {
       const adminMember = channel.members.first();
       await candidate.voice.setChannel(channel.id, 'سحب تلقائي لمواطن إلى إداري فاضي');
+
       activeSessions.set(candidate.id, {
         adminId: adminMember.id,
         startTime: Date.now()
       });
+
       console.log(`✅ تم سحب ${candidate.user.tag} إلى ${channel.name} (الإداري: ${adminMember.user.tag})`);
     } catch (err) {
       console.error(`⚠️ فشل سحب ${candidate.user.tag}:`, err.message);
@@ -315,7 +309,7 @@ client.once(Events.ClientReady, async (c) => {
 });
 
 // ============================================================
-// حركة الصوت
+// حركة الصوت (السحب التلقائي وتسجيل الـ Done)
 // ============================================================
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const guild = newState.guild || oldState.guild;
@@ -402,17 +396,17 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 });
 
 // ============================================================
-// معالجة التفاعلات (أزرار، مودالات، أوامر)
+// الأوامر، الأزرار، والـ Modals (مع منع التقييم المتكرر)
 // ============================================================
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
 
     // --------------------------------------------------------
-    // الأزرار
+    // التعامل مع الأزرار
     // --------------------------------------------------------
     if (interaction.isButton()) {
 
-      // تقييم الإداري (مع منع التقييم المتكرر)
+      // 0. أزرار تقييم الإداري (مع منع التقييم المتكرر)
       if (interaction.customId.startsWith('rate_')) {
         const parts = interaction.customId.split('_');
         const rating = parseInt(parts[1]);
@@ -481,7 +475,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      // طلب إجازة
+      // 1. زر فتح نموذج طلب الإجازة
       if (interaction.customId === 'open_leave_modal') {
         const modal = new ModalBuilder()
           .setCustomId('leave_modal')
@@ -512,7 +506,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      // طلب استقالة
+      // 2. زر فتح نموذج طلب الاستقالة
       if (interaction.customId === 'open_resign_modal') {
         const modal = new ModalBuilder()
           .setCustomId('resign_modal')
@@ -532,7 +526,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      // طلب كسر إجازة
+      // 2.5 زر فتح نموذج طلب كسر الإجازة
       if (interaction.customId === 'open_break_modal') {
         const modal = new ModalBuilder()
           .setCustomId('break_modal')
@@ -552,7 +546,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      // قبول/رفض طلبات الإجازات والاستقالات
+      // 3. أزرار قبول/رفض طلب إجازة أو استقالة
       if (interaction.customId.startsWith('req_accept_') || interaction.customId.startsWith('req_reject_')) {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({
@@ -657,10 +651,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     // --------------------------------------------------------
-    // المودالات
+    // التعامل مع إرسال النماذج (Modals)
     // --------------------------------------------------------
     if (interaction.isModalSubmit()) {
-      const requestsChannel = await interaction.guild.channels.fetch(REQUESTS_CHANNEL_ID);
+      const requestsChannel = await interaction.guild.channels.fetch(LEAVE_PANEL_CHANNEL_ID);
 
       const buildApplicationEmbed = (typeTitle, fieldsData) => {
         return new EmbedBuilder()
@@ -775,7 +769,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     // --------------------------------------------------------
-    // أوامر سلاش
+    // التعامل مع الأوامر (Slash Commands)
     // --------------------------------------------------------
     if (interaction.isChatInputCommand()) {
 
@@ -885,6 +879,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [embed] });
       }
 
+      // أمر التوب 10
       if (interaction.commandName === 'top_done') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة فقط.', ephemeral: true });
@@ -909,6 +904,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [embed] });
       }
 
+      // أمر عرض الكل
       if (interaction.commandName === 'all_dones') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة فقط.', ephemeral: true });
@@ -929,6 +925,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [embed] });
       }
 
+      // إضافة إنجازات
       if (interaction.commandName === 'add_done') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة العليا فقط.', ephemeral: true });
@@ -945,6 +942,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: `✅ تم إضافة \`${amount}\` إلى إحصائيات <@${admin.id}>. المجموع الحالي: \`${newCount}\``, ephemeral: true });
       }
 
+      // خصم إنجازات
       if (interaction.commandName === 'remove_done') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة العليا فقط.', ephemeral: true });
@@ -961,6 +959,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: `✅ تم خصم \`${amount}\` من إحصائيات <@${admin.id}>. المجموع الحالي: \`${newCount}\``, ephemeral: true });
       }
 
+      // تصفير الإحصائيات
       if (interaction.commandName === 'reset_all') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة العليا فقط.', ephemeral: true });
@@ -980,7 +979,4 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-// ============================================================
-// تشغيل البوت
-// ============================================================
 client.login(BOT_TOKEN);
