@@ -103,7 +103,7 @@ function ratingLabel(rating) {
   return labels[rating] || '';
 }
 
-const MAX_LEAVE_DAYS = 10; // الحد الأقصى لأيام الإجازة
+const MAX_LEAVE_DAYS = 14; // الحد الأقصى لأيام الإجازة
 const LEAVE_PANEL_COLOR = 0xC2410C; // برتقالي غامق
 const LEAVE_BANNER_PATH = path.join(__dirname, 'leave_banner.png');
 const LEAVE_BANNER_FILENAME = 'leave_banner.png';
@@ -173,6 +173,12 @@ function isMutedOrDeafened(voiceState) {
   );
 }
 
+// للإداري فقط: الميوت ما يمنع السحب، بس الديفن (Deafen) يمنعه
+function isDeafened(voiceState) {
+  if (!voiceState) return false;
+  return voiceState.selfDeaf || voiceState.serverDeaf;
+}
+
 function getNextEligibleWaitingMember(guild) {
   for (const waitingId of WAITING_CHANNEL_IDS) {
     const waitingChannel = guild.channels.cache.get(waitingId);
@@ -208,7 +214,7 @@ function isFreeAdminRoom(channel) {
 
   const adminMember = members[0];
   if (!adminMember.roles.cache.has(ADMIN_ROLE_ID)) return false;
-  if (isMutedOrDeafened(adminMember.voice)) return false;
+  if (isDeafened(adminMember.voice)) return false;
 
   return true;
 }
