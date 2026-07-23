@@ -76,8 +76,9 @@ function ratingStarsBar(rating) {
 }
 
 function ratingColor(rating) {
-  const colors = { 1: 0xed4245, 2: 0xf1a10c, 3: 0xfee75c, 4: 0x57f287, 5: 0x2ecc71 };
-  return colors[rating] || 0xffd700;
+  if (rating >= 4) return 0x2ecc71; // 4-5: أخضر
+  if (rating >= 2) return 0xf1a10c; // 2-3: برتقالي
+  return 0xed4245; // 1: أحمر
 }
 
 function ratingLabel(rating) {
@@ -89,6 +90,8 @@ const MAX_LEAVE_DAYS = 10; // الحد الأقصى لأيام الإجازة
 const LEAVE_PANEL_COLOR = 0xC2410C; // برتقالي غامق
 const LEAVE_BANNER_PATH = path.join(__dirname, 'leave_banner.png');
 const LEAVE_BANNER_FILENAME = 'leave_banner.png';
+const SERVER_LOGO_PATH = path.join(__dirname, 'server_logo.png');
+const SERVER_LOGO_FILENAME = 'server_logo.png';
 
 // ===== نظام حفظ الإجازات النشطة =====
 const LEAVES_FILE = path.join(__dirname, 'active_leaves.json');
@@ -375,6 +378,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const guild = client.guilds.cache.get(GUILD_ID);
           const ratingChannel = guild.channels.cache.get(RATING_CHANNEL_ID);
           if (ratingChannel) {
+            const logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
+
             const ratingEmbed = new EmbedBuilder()
               .setColor(ratingColor(rating))
               .setAuthor({
@@ -382,6 +387,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 iconURL: interaction.user.displayAvatarURL({ dynamic: true })
               })
               .setTitle('🌟 تقييم إداري جديد')
+              .setThumbnail(`attachment://${SERVER_LOGO_FILENAME}`)
               .addFields(
                 { name: '👤 المواطن', value: `<@${interaction.user.id}>`, inline: true },
                 { name: '🛡️ الإداري', value: adminId ? `<@${adminId}>` : 'غير معروف', inline: true },
@@ -391,7 +397,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
               .setFooter({ text: 'نظام تقييم الخدمة' })
               .setTimestamp();
 
-            await ratingChannel.send({ embeds: [ratingEmbed] });
+            await ratingChannel.send({ embeds: [ratingEmbed], files: [logoFile] });
           }
         } catch (e) {
           console.error('❌ خطأ أثناء معالجة وإرسال التقييم:', e);
