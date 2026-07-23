@@ -413,7 +413,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
             if (reqType === 'leave') {
               await targetMember.roles.add(LEAVE_ROLE_ID, 'قبول طلب إجازة');
-              roleActionNote = `\n🏷️ تم إعطاؤك رتبة <@&${LEAVE_ROLE_ID}> تلقائيًا.`;
+              roleActionNote = `\n🏷️ تم تحديث حالتك إلى: **Out of service ✈️**`;
 
               const durationField = originalEmbed.data.fields.find(f => f.name.includes('المدة'));
               if (durationField) {
@@ -428,7 +428,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
             } else if (reqType === 'resign') {
               await targetMember.roles.set([RESIGNATION_KEEP_ROLE_ID], 'قبول طلب استقالة');
-              roleActionNote = `\n🏷️ تم سحب جميع رتبك ما عدا <@&${RESIGNATION_KEEP_ROLE_ID}>.`;
+              roleActionNote = `\n🏷️ تم تحديث حالتك إلى: **𝗪𝗵𝗶𝘁𝗲𝗹𝗶𝘀𝘁𝗲𝗱**`;
             } else if (reqType === 'break') {
               if (targetMember.roles.cache.has(LEAVE_ROLE_ID)) {
                 await targetMember.roles.remove(LEAVE_ROLE_ID, 'قبول طلب كسر إجازة');
