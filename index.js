@@ -31,23 +31,28 @@ if (!BOT_TOKEN || !GUILD_ID || !WAITING_CHANNEL_ID || !ADMIN_ROLE_ID) {
   process.exit(1);
 }
 
-// يدعم أكثر من روم انتظار — اكتبهم بنفس المتغير مفصولين بفاصلة:
-const WAITING_CHANNEL_IDS = WAITING_CHANNEL_ID
-  .split(',')
-  .map((id) => id.trim())
-  .filter(Boolean);
+// ===== إضافة رومات الانتظار الجديدة بشكل ثابت =====
+const ADDITIONAL_WAITING_IDS = [
+  '1481398869463138604',
+  '1519511668823167116'
+];
+
+// دمج الرومات من المتغير البيئي مع الرومات الثابتة
+const WAITING_CHANNEL_IDS = [
+  ...WAITING_CHANNEL_ID.split(',').map(id => id.trim()).filter(Boolean),
+  ...ADDITIONAL_WAITING_IDS
+];
 
 // ===== إعدادات عامة =====
-const CITIZEN_ALLOWED_CATEGORY_ID = '1459304931013033994'; // الكاتاقوري المسموح بالسحب منه حصراً
-const RATING_CHANNEL_ID = '1529482677516898555'; // روم تقييمات الإداريين المنفصل
-const LEAVE_EMBED_CHANNEL_ID = '1529495796247167178'; // الروم اللي فيه لوحة طلبات الإجازة
-const LEAVE_PANEL_CHANNEL_ID = '1529440458030321714'; // روم المسؤولين اللي توصله طلبات الإجازة/الاستقالة للمراجعة
-const LEAVE_ROLE_ID = '1459304469127758027'; // الرتبة اللي تنعطى تلقائيًا عند قبول إجازة
-const RESIGNATION_KEEP_ROLE_ID = '1476796533168017428'; // الرتبة الوحيدة اللي تضل عند قبول استقالة
-const STAFF_ROLE_IDS = ['1459304407899443396', '1459304410923532481']; // الرتب المسموح لها تستخدم أوامر البوت
-const DONE_TEXT_CHANNEL_ID = '1476746882993623150'; // الروم اللي ترسل فيه سجلات الـ Done
+// تم إلغاء استخدام CITIZEN_ALLOWED_CATEGORY_ID لأننا لم نعد نتحقق من الكاتاقوري
+const RATING_CHANNEL_ID = '1529482677516898555';
+const LEAVE_EMBED_CHANNEL_ID = '1529495796247167178';
+const LEAVE_PANEL_CHANNEL_ID = '1529440458030321714';
+const LEAVE_ROLE_ID = '1459304469127758027';
+const RESIGNATION_KEEP_ROLE_ID = '1476796533168017428';
+const STAFF_ROLE_IDS = ['1459304407899443396', '1459304410923532481'];
+const DONE_TEXT_CHANNEL_ID = '1476746882993623150';
 
-// 🎯 قائمة رومات الإداريين المسموح للبوت يسحب المواطنين لها حصراً — أي روم غير هذي القائمة ما ينسحب له أحد
 const ADMIN_ROOM_IDS = [
   '1499105265272754246',
   '1499105221383819497',
@@ -86,6 +91,9 @@ function saveDoneCounts() {
 
 const doneCounts = loadDoneCounts();
 
+// ===== نظام منع التقييم المتكرر =====
+const evaluatedLogs = new Set(); // يحفظ معرفات سجلات الـ Done التي تم تقييمها
+
 function ratingStarsBar(rating) {
   const filled = '⭐'.repeat(rating);
   const empty = '☆'.repeat(5 - rating);
@@ -93,9 +101,9 @@ function ratingStarsBar(rating) {
 }
 
 function ratingColor(rating) {
-  if (rating >= 4) return 0x2ecc71; // 4-5: أخضر
-  if (rating >= 2) return 0xf1a10c; // 2-3: برتقالي
-  return 0xed4245; // 1: أحمر
+  if (rating >= 4) return 0x2ecc71;
+  if (rating >= 2) return 0xf1a10c;
+  return 0xed4245;
 }
 
 function ratingLabel(rating) {
@@ -103,8 +111,8 @@ function ratingLabel(rating) {
   return labels[rating] || '';
 }
 
-const MAX_LEAVE_DAYS = 14; // الحد الأقصى لأيام الإجازة
-const LEAVE_PANEL_COLOR = 0xC2410C; // برتقالي غامق
+const MAX_LEAVE_DAYS = 14;
+const LEAVE_PANEL_COLOR = 0xC2410C;
 const LEAVE_BANNER_PATH = path.join(__dirname, 'leave_banner.png');
 const LEAVE_BANNER_FILENAME = 'leave_banner.png';
 const SERVER_LOGO_PATH = path.join(__dirname, 'server_logo.png');
@@ -143,12 +151,11 @@ const pullLocks = new Set();
 const activeSessions = new Map();
 
 // ============================================================
-// حماية روم الإجازات (حذف أي رسالة عضو فيه)
+// حماية روم الإجازات
 // ============================================================
 client.on(Events.MessageCreate, async (message) => {
   if (message.guild && message.channelId === LEAVE_EMBED_CHANNEL_ID) {
     if (message.author.bot) return;
-
     const isAdmin = message.member && hasStaffRole(message.member);
     if (!isAdmin) {
       try {
@@ -161,7 +168,7 @@ client.on(Events.MessageCreate, async (message) => {
 });
 
 // ============================================================
-// دوال مساعدة لنظام السحب
+// دوال مساعدة لنظام السحب (تم تعديلها)
 // ============================================================
 function isMutedOrDeafened(voiceState) {
   if (!voiceState) return false;
@@ -173,28 +180,20 @@ function isMutedOrDeafened(voiceState) {
   );
 }
 
-// للإداري فقط: الميوت ما يمنع السحب، بس الديفن (Deafen) يمنعه
 function isDeafened(voiceState) {
   if (!voiceState) return false;
   return voiceState.selfDeaf || voiceState.serverDeaf;
 }
 
+// 🔥 دالة البحث عن مواطن في رومات الانتظار - بدون أي شرط رتبة أو كاتاقوري
 function getNextEligibleWaitingMember(guild) {
   for (const waitingId of WAITING_CHANNEL_IDS) {
     const waitingChannel = guild.channels.cache.get(waitingId);
     if (!waitingChannel || !waitingChannel.members) continue;
 
-    // 🔒 التحقق من أن روم الانتظار يقع داخل الكاتاقوري المحدد حصراً
-    if (waitingChannel.parentId !== CITIZEN_ALLOWED_CATEGORY_ID) continue;
-
     for (const [, member] of waitingChannel.members) {
-      if (CITIZEN_ROLE_ID && !member.roles.cache.has(CITIZEN_ROLE_ID)) continue;
-
       const vs = member.voice;
-
-      // 🔒 شرط إضافي: التأكد من أن القناة الصوتية للمواطن في الكاتاقوري المحدد
-      if (vs.channel && vs.channel.parentId !== CITIZEN_ALLOWED_CATEGORY_ID) continue;
-
+      // لا نتحقق من رتبة المواطن ولا من الكاتاقوري
       if (!isMutedOrDeafened(vs)) {
         return member;
       }
@@ -205,8 +204,6 @@ function getNextEligibleWaitingMember(guild) {
 
 function isFreeAdminRoom(channel) {
   if (!channel || channel.type !== 2) return false;
-
-  // 🎯 السحب مسموح فقط لهذي الرومات المحددة — أي روم ثاني يترفض فورًا حتى لو داخل نفس الكاتاقوري
   if (!ADMIN_ROOM_IDS.includes(channel.id)) return false;
 
   const members = [...channel.members.values()];
@@ -234,6 +231,7 @@ async function tryPullForAllFreeAdmins(guild) {
       const adminMember = channel.members.first();
       await candidate.voice.setChannel(channel.id, 'سحب تلقائي لمواطن إلى إداري فاضي');
 
+      // تخزين الجلسة لضمان تسجيل الـ Done عند الخروج
       activeSessions.set(candidate.id, {
         adminId: adminMember.id,
         startTime: Date.now()
@@ -249,7 +247,7 @@ async function tryPullForAllFreeAdmins(guild) {
 }
 
 // ============================================================
-// تسجيل الأوامر عند تشغيل البوت
+// تسجيل الأوامر
 // ============================================================
 client.once(Events.ClientReady, async (c) => {
   console.log(`🤖 البوت شغال باسم ${c.user.tag}`);
@@ -296,7 +294,7 @@ client.once(Events.ClientReady, async (c) => {
 });
 
 // ============================================================
-// حركة الصوت (السحب التلقائي فقط)
+// حركة الصوت (السحب التلقائي وتسجيل الـ Done)
 // ============================================================
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const guild = newState.guild || oldState.guild;
@@ -304,18 +302,20 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
   const citizenId = newState.id;
 
+  // 🔍 التحقق من خروج المواطن من روم الإداري (إنهاء الجلسة)
   if (activeSessions.has(citizenId) && newState.channelId !== oldState.channelId) {
     const { adminId, startTime } = activeSessions.get(citizenId);
     activeSessions.delete(citizenId);
 
     const durationSec = Math.floor((Date.now() - startTime) / 1000);
 
+    // تسجيل الـ Done فقط إذا كانت المدة 5 ثوانٍ على الأقل (لتجنب الإنهاء الفوري)
     if (durationSec >= 5) {
       const minutes = Math.floor(durationSec / 60);
       const seconds = durationSec % 60;
       const durationText = minutes > 0 ? `${minutes} دقيقة و ${seconds} ثانية` : `${seconds} ثانية`;
 
-      // ===== احتساب الـ Done وإرسال سجل بروم الـ Done =====
+      // تحديث إحصائيات الـ Done
       const currentCount = (doneCounts.get(adminId) || 0) + 1;
       doneCounts.set(adminId, currentCount);
       saveDoneCounts();
@@ -342,6 +342,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         console.error('❌ خطأ أثناء إرسال سجل الـ Done:', err);
       }
 
+      // إرسال رسالة خاصة للمواطن للتقييم
       try {
         const citizenUser = client.users.cache.get(citizenId) || await client.users.fetch(citizenId);
         const logMsgId = logMessage ? logMessage.id : 'none';
@@ -376,6 +377,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
+  // محاولة السحب التلقائي بعد أي تغيير في الصوت
   try {
     await tryPullForAllFreeAdmins(guild);
   } catch (err) {
@@ -384,7 +386,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 });
 
 // ============================================================
-// الأوامر، الأزرار، والـ Modals
+// الأوامر، الأزرار، والـ Modals (تم تعديل معالجة التقييم)
 // ============================================================
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
@@ -394,13 +396,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // --------------------------------------------------------
     if (interaction.isButton()) {
 
-      // 0. أزرار تقييم الإداري
+      // 0. أزرار تقييم الإداري (مع منع التقييم المتكرر)
       if (interaction.customId.startsWith('rate_')) {
         const parts = interaction.customId.split('_');
         const rating = parseInt(parts[1]);
         const adminId = parts[2];
         const logMsgId = parts[3];
         const stars = ratingStarsBar(rating);
+
+        // 🔒 التحقق من أن هذا السجل لم يُقيّم مسبقاً
+        if (evaluatedLogs.has(logMsgId)) {
+          return interaction.reply({
+            content: '⚠️ تم تقييم هذه الخدمة مسبقاً، شكراً لك!',
+            ephemeral: true
+          });
+        }
+
+        // إضافة السجل إلى قائمة المُقيّمين
+        evaluatedLogs.add(logMsgId);
 
         await interaction.update({ content: `✅ شكراً لتقييمك! (أعطيت ${stars})`, embeds: [], components: [] });
 
