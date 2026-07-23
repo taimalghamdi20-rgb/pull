@@ -1,11 +1,12 @@
 {
   "name": "pull-citizens-bot",
   "version": "1.0.0",
-  "description": "بوت يسحب المواطنين تلقائياً مع نظام تقييم وإجازات",
+  "description": "بوت يسحب المواطنين من روم الانتظار إلى روم الإداري تلقائيًا",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "deploy": "node deploy-commands.js"
   },
   "dependencies": {
     "discord.js": "^14.15.3",
