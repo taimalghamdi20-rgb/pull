@@ -175,8 +175,7 @@ const client = new Client({
 });
 
 const pullLocks = new Set();
-const activeSessions = new Map(); // citizenId -> { adminId, startTime, message, status }
-const pendingCitizens = new Set(); // لتتبع المواطنين الذين لديهم طلب معلق
+const activeSessions = new Map();
 
 // ============================================================
 // حماية روم الإجازات
@@ -204,10 +203,7 @@ function getNextEligibleWaitingMember(guild) {
     const waitingChannel = guild.channels.cache.get(waitingId);
     if (!waitingChannel || !waitingChannel.members) continue;
     for (const [, member] of waitingChannel.members) {
-      // نتحقق أن هذا المواطن ليس لديه طلب معلق
-      if (!pendingCitizens.has(member.id)) {
-        return member;
-      }
+      return member;
     }
   }
   return null;
@@ -225,7 +221,7 @@ function isFreeAdminRoom(channel) {
 }
 
 // ============================================================
-// دوال الجلسة
+// دوال الجلسة (القبول، الرفض، الإنهاء، الإشعارات)
 // ============================================================
 async function sendCitizenNotification(citizenUser, adminUser) {
   try {
@@ -319,9 +315,6 @@ async function acceptSession(guild, citizenId, adminId, message) {
 
   await message.edit({ embeds: [embed], components: [row] });
 
-  // إزالة المواطن من قائمة الانتظار المعلقة
-  pendingCitizens.delete(citizenId);
-
   try {
     const citizenUser = await client.users.fetch(citizenId);
     const embedNotify = new EmbedBuilder()
@@ -361,18 +354,13 @@ async function rejectSession(guild, citizenId, adminId, message) {
 
   await message.edit({ embeds: [embed], components: [disabledRow] });
 
-  // إزالة المواطن من قائمة الانتظار المعلقة لإتاحة إرسال طلب جديد له
-  pendingCitizens.delete(citizenId);
-  activeSessions.delete(citizenId);
-
   try {
     const citizenUser = await client.users.fetch(citizenId);
-    await citizenUser.send(`❌ للأسف، تم رفض طلب الدعم الخاص بك بواسطة <@${adminId}>.\nسيتم إعادة وضعك في قائمة الانتظار.`);
+    await citizenUser.send(`❌ للأسف، تم رفض طلب الدعم الخاص بك بواسطة <@${adminId}>.`);
   } catch (err) {
     console.error('❌ تعذر إرسال رسالة الرفض للمواطن:', err);
   }
 
-  // إعادة المواطن إلى روم الانتظار
   try {
     const guild = client.guilds.cache.get(GUILD_ID);
     const waitingChannel = guild.channels.cache.get(WAITING_CHANNEL_IDS[0]);
@@ -383,6 +371,8 @@ async function rejectSession(guild, citizenId, adminId, message) {
   } catch (err) {
     console.error('⚠️ فشل إعادة المواطن للانتظار:', err);
   }
+
+  activeSessions.delete(citizenId);
 }
 
 async function endSession(guild, citizenId, adminId, startTime, message) {
@@ -414,10 +404,6 @@ async function endSession(guild, citizenId, adminId, startTime, message) {
 
   await message.edit({ embeds: [embed], components: [disabledRow] });
 
-  // إزالة المواطن من قائمة الانتظار المعلقة
-  pendingCitizens.delete(citizenId);
-  activeSessions.delete(citizenId);
-
   try {
     const citizenUser = await client.users.fetch(citizenId);
     const logMsgId = message.id;
@@ -436,10 +422,12 @@ async function endSession(guild, citizenId, adminId, startTime, message) {
   } catch (err) {
     console.error('⚠️ تعذر إرسال رسالة التقييم:', err);
   }
+
+  activeSessions.delete(citizenId);
 }
 
 // ============================================================
-// نظام السحب التلقائي (مع إرسال طلب قبول واحد لكل مواطن)
+// نظام السحب التلقائي (مع إرسال طلب القبول)
 // ============================================================
 async function tryPullForAllFreeAdmins(guild) {
   for (const roomId of ADMIN_ROOM_IDS) {
@@ -451,17 +439,12 @@ async function tryPullForAllFreeAdmins(guild) {
     const candidate = getNextEligibleWaitingMember(guild);
     if (!candidate) continue;
 
-    // تأكد أن المواطن ليس لديه طلب معلق بالفعل
-    if (pendingCitizens.has(candidate.id)) continue;
-
     pullLocks.add(channel.id);
     try {
       const adminMember = channel.members.first();
       
-      // إرسال رسالة للمواطن (استعد لجلسة الدعم)
       await sendCitizenNotification(candidate.user, adminMember.user);
 
-      // تسجيل الجلسة في الذاكرة
       activeSessions.set(candidate.id, {
         adminId: adminMember.id,
         startTime: null,
@@ -469,10 +452,6 @@ async function tryPullForAllFreeAdmins(guild) {
         status: 'pending'
       });
 
-      // إضافة المواطن إلى قائمة المعلقة لمنع تكرار الطلب
-      pendingCitizens.add(candidate.id);
-
-      // إرسال طلب الجلسة في روم الـ Done مع زر قبول/رفض
       const message = await sendSessionRequest(guild, candidate.user, adminMember.user);
       if (message) {
         activeSessions.get(candidate.id).message = message;
@@ -482,9 +461,6 @@ async function tryPullForAllFreeAdmins(guild) {
 
     } catch (err) {
       console.error(`⚠️ فشل إرسال طلب الدعم لـ ${candidate.user.tag}:`, err.message);
-      // في حالة الفشل، نزيل المواطن من قائمة المعلقة
-      pendingCitizens.delete(candidate.id);
-      activeSessions.delete(candidate.id);
     } finally {
       pullLocks.delete(channel.id);
     }
@@ -528,7 +504,7 @@ client.once(Events.ClientReady, async (c) => {
 });
 
 // ============================================================
-// أحداث الصوت
+// أحداث الصوت - مع تعديل شرط الإنهاء التلقائي
 // ============================================================
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const guild = newState.guild || oldState.guild;
@@ -536,53 +512,24 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const userId = newState.id;
 
   const session = activeSessions.get(userId);
-  
-  // إذا غادر المواطن روم الانتظار أثناء وجود طلب معلق، نلغي الطلب
-  if (session && session.status === 'pending') {
-    const wasInWaiting = WAITING_CHANNEL_IDS.includes(oldState.channelId);
-    const isNowInWaiting = WAITING_CHANNEL_IDS.includes(newState.channelId);
+
+  // إذا كانت الجلسة في حالة "accepted" (نشطة)
+  if (session && session.status === 'accepted') {
+    // تحقق مما إذا كان المواطن غادر روم الإداري (أي كان في روم إداري والآن ليس فيه)
+    const wasInAdminRoom = oldState.channelId && ADMIN_ROOM_IDS.includes(oldState.channelId);
+    const isInAdminRoom = newState.channelId && ADMIN_ROOM_IDS.includes(newState.channelId);
     
-    if (wasInWaiting && !isNowInWaiting) {
-      // المواطن غادر روم الانتظار قبل القبول، نلغي الطلب
-      pendingCitizens.delete(userId);
+    // إذا كان قد غادر روم الإداري (أي خرج من الروم أو انتقل إلى روم آخر غير إداري)
+    if (wasInAdminRoom && !isInAdminRoom) {
+      // إنهاء الجلسة تلقائياً
       if (session.message) {
-        const embed = EmbedBuilder.from(session.message.embeds[0]);
-        embed.setColor(0xe74c3c);
-        embed.spliceFields(3, 1, { name: 'الحالة', value: '❌ تم الإلغاء (غادر المواطن)', inline: false });
-        embed.setFooter({ text: 'تم إلغاء الجلسة', iconURL: 'attachment://server_logo.png' });
-        const disabledRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId('disabled')
-            .setLabel('تم الإلغاء')
-            .setStyle(ButtonStyle.Secondary)
-            .setDisabled(true)
-        );
-        await session.message.edit({ embeds: [embed], components: [disabledRow] });
+        await endSession(guild, userId, session.adminId, session.startTime, session.message);
       }
       activeSessions.delete(userId);
     }
   }
 
-  // إذا كان المواطن في جلسة مقبولة وغادر الروم ننهي الجلسة
-  if (session && session.status === 'accepted' && newState.channelId !== oldState.channelId) {
-    if (session.message) {
-      await endSession(guild, userId, session.adminId, session.startTime, session.message);
-    }
-    activeSessions.delete(userId);
-    pendingCitizens.delete(userId);
-  }
-
-  // إذا دخل مواطن جديد إلى روم الانتظار أو عاد إليه، نحاول السحب
-  const enteredWaiting = WAITING_CHANNEL_IDS.includes(newState.channelId) && !WAITING_CHANNEL_IDS.includes(oldState.channelId);
-  if (enteredWaiting) {
-    try {
-      await tryPullForAllFreeAdmins(guild);
-    } catch (err) {
-      console.error('خطأ في السحب:', err);
-    }
-  }
-
-  // إذا أصبح إداري فاضي، نحاول السحب
+  // محاولة السحب التلقائي (للبحث عن إداري فاضي)
   try {
     await tryPullForAllFreeAdmins(guild);
   } catch (err) {
@@ -613,6 +560,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         await acceptSession(interaction.guild, citizenId, adminId, interaction.message);
 
+        // سحب المواطن إلى روم الإداري
         try {
           const citizenMember = await interaction.guild.members.fetch(citizenId);
           const adminMember = await interaction.guild.members.fetch(adminId);
@@ -644,14 +592,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         await rejectSession(interaction.guild, citizenId, adminId, interaction.message);
-        
-        // بعد الرفض، نحاول إرسال طلب جديد للمواطن لإداري آخر
-        try {
-          await tryPullForAllFreeAdmins(interaction.guild);
-        } catch (err) {
-          console.error('⚠️ فشل محاولة إرسال طلب جديد بعد الرفض:', err);
-        }
-        
         return interaction.reply({ content: '❌ تم رفض الجلسة.', ephemeral: true });
       }
 
