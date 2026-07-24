@@ -93,8 +93,9 @@ const ADMIN_ROOM_IDS = [
   '1519516058682130632',
 ];
 
-// الرتبة المسموح لها بقبول أي جلسة (حتى لإداري آخر)
-const ALLOWED_ACCEPT_ROLE_ID = '1459304407899443396';
+// الرتب المسموح لها بقبول الجلسات
+const ALLOWED_ACCEPT_ROLE_ID = '1459304407899443396'; // قبول أي جلسة لإداري آخر
+const SELF_ACCEPT_ROLE_ID = '1499102575918579793';   // قبول الجلسة الخاصة فقط
 
 function hasStaffRole(member) {
   return STAFF_ROLE_IDS.some((roleId) => member.roles.cache.has(roleId));
@@ -695,8 +696,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const citizenId = parts[2];
         const originalAdminId = parts[3]; // الإداري المستهدف في الزر
 
-        // التحقق من الصلاحية: يجب أن يكون لديه الرتبة المحددة
-        if (!interaction.member.roles.cache.has(ALLOWED_ACCEPT_ROLE_ID)) {
+        // التحقق من الصلاحية
+        const hasFullAccept = interaction.member.roles.cache.has(ALLOWED_ACCEPT_ROLE_ID);
+        const hasSelfAccept = interaction.member.roles.cache.has(SELF_ACCEPT_ROLE_ID) && interaction.user.id === originalAdminId;
+
+        if (!hasFullAccept && !hasSelfAccept) {
           return interaction.reply({
             content: '❌ ليس لديك الصلاحية لقبول هذه الجلسة.',
             ephemeral: true
@@ -711,7 +715,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.reply({ content: '⚠️ هذه الجلسة لم تعد معلقة.', ephemeral: true });
         }
 
-        // قبول الجلسة باستخدام الإداري الأصلي (الموجود في الزر)
         const message = interaction.message;
         const result = await acceptSession(interaction.guild, citizenId, originalAdminId, message);
         if (!result.success) {
@@ -728,7 +731,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             session.startTime = Date.now();
             session.status = 'accepted';
           } else {
-            // إذا لم يكن الإداري في روم، نرسل تنبيه (لكن الجلسة مقبولة)
             await interaction.followUp({ content: '⚠️ الإداري المستهدف ليس في روم صوتي، تم قبول الجلسة لكن لم يتم نقل المواطن.', ephemeral: true });
           }
         } catch (err) {
