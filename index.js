@@ -427,7 +427,71 @@ async function endSession(guild, citizenId, adminId, startTime, message) {
 }
 
 // ============================================================
-// نظام السحب التلقائي (مع إرسال طلب القبول - رسالة واحدة فقط)
+// دوال إرسال رسائل القبول/الرفض (DM) بالشكل القديم
+// ============================================================
+async function sendAcceptanceDM(userId, type, adminId) {
+  try {
+    const user = await client.users.fetch(userId);
+    const title = '🎉 تم قبول طلبك';
+    let description = '';
+    let fields = [];
+
+    if (type === 'leave') {
+      description = `تهانينا! تم قبول طلب **الإجازة** الخاص بك.`;
+      fields = [
+        { name: '🏷️ الحالة', value: '**Out of service ✈️**', inline: true },
+        { name: '👤 المسؤول', value: `<@${adminId}>`, inline: true },
+        { name: '📋 نوع الطلب', value: 'طلب إجازة', inline: true }
+      ];
+    } else if (type === 'resign') {
+      description = `تهانينا! تم قبول طلب **الاستقالة** الخاص بك.`;
+      fields = [
+        { name: '🏷️ الحالة', value: '**Whitelisted**', inline: true },
+        { name: '👤 المسؤول', value: `<@${adminId}>`, inline: true },
+        { name: '📋 نوع الطلب', value: 'طلب استقالة', inline: true }
+      ];
+    } else if (type === 'break') {
+      description = `تم قبول طلب **كسر الإجازة** الخاص بك.`;
+      fields = [
+        { name: '🏷️ الحالة', value: 'تم العودة من الإجازة', inline: true },
+        { name: '👤 المسؤول', value: `<@${adminId}>`, inline: true },
+        { name: '📋 نوع الطلب', value: 'طلب كسر إجازة', inline: true }
+      ];
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle(title)
+      .setColor(0x2ecc71)
+      .setDescription(description)
+      .addFields(fields)
+      .setTimestamp();
+
+    await user.send({ embeds: [embed] });
+  } catch (err) {
+    console.error(`⚠️ تعذر إرسال رسالة القبول للـ ${type}:`, err);
+  }
+}
+
+async function sendRejectionDM(userId, type, adminId) {
+  try {
+    const user = await client.users.fetch(userId);
+    const embed = new EmbedBuilder()
+      .setTitle('❌ تم رفض طلبك')
+      .setColor(0xe74c3c)
+      .setDescription(`للأسف، تم رفض طلب **${type}** الخاص بك.`)
+      .addFields(
+        { name: '👤 المسؤول', value: `<@${adminId}>`, inline: true },
+        { name: '📋 نوع الطلب', value: `طلب ${type}`, inline: true }
+      )
+      .setTimestamp();
+    await user.send({ embeds: [embed] });
+  } catch (err) {
+    console.error(`⚠️ تعذر إرسال رسالة الرفض للـ ${type}:`, err);
+  }
+}
+
+// ============================================================
+// نظام السحب التلقائي (مع منع السبام)
 // ============================================================
 async function tryPullForAllFreeAdmins(guild) {
   for (const roomId of ADMIN_ROOM_IDS) {
@@ -439,7 +503,7 @@ async function tryPullForAllFreeAdmins(guild) {
     const candidate = getNextEligibleWaitingMember(guild);
     if (!candidate) continue;
 
-    // ✅ التحقق من أن المواطن ليس لديه جلسة معلقة مسبقاً (لمنع السبام)
+    // منع السبام: إذا كان المواطن لديه جلسة معلقة، نتخطى
     if (activeSessions.has(candidate.id)) continue;
 
     pullLocks.add(channel.id);
@@ -756,6 +820,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (isAccept) {
           try {
             const target = await interaction.guild.members.fetch(requesterId);
+            const typeLabels = { leave: 'إجازة', resign: 'استقالة', break: 'كسر إجازة' };
+            
             if (reqType === 'leave') {
               await target.roles.add(LEAVE_ROLE_ID);
               const durationField = originalEmbed.data.fields.find(f => f.name.includes('المدة'));
@@ -767,14 +833,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
                   saveActiveLeaves();
                 }
               }
+              await sendAcceptanceDM(requesterId, 'leave', interaction.user.id);
             } else if (reqType === 'resign') {
-              // ✅ حذف الرتب وحذف النيك نيم عند قبول الاستقالة
               await target.roles.set([RESIGNATION_KEEP_ROLE_ID]);
               try {
                 await target.setNickname(null, 'تم قبول الاستقالة - حذف النيك نيم');
-              } catch (nickErr) {
-                console.error('⚠️ فشل حذف النيك نيم:', nickErr);
-              }
+              } catch (e) {}
+              await sendAcceptanceDM(requesterId, 'resign', interaction.user.id);
             } else if (reqType === 'break') {
               if (target.roles.cache.has(LEAVE_ROLE_ID)) {
                 await target.roles.remove(LEAVE_ROLE_ID);
@@ -783,24 +848,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 activeLeaves.delete(requesterId);
                 saveActiveLeaves();
               }
+              await sendAcceptanceDM(requesterId, 'break', interaction.user.id);
             }
           } catch (e) { console.error('⚠️ خطأ في تعديل الرتب:', e); }
-        }
-
-        try {
-          const user = await client.users.fetch(requesterId);
+        } else {
+          // الرفض
           const typeLabels = { leave: 'إجازة', resign: 'استقالة', break: 'كسر إجازة' };
-          await user.send({
-            embeds: [
-              new EmbedBuilder()
-                .setTitle(isAccept ? '🎉 تم القبول' : '❌ تم الرفض')
-                .setColor(isAccept ? 0x2ecc71 : 0xe74c3c)
-                .setDescription(isAccept ? `تم قبول طلب ${typeLabels[reqType]}` : `تم رفض طلب ${typeLabels[reqType]}`)
-                .addFields({ name: 'المسؤول', value: `<@${interaction.user.id}>` })
-                .setTimestamp()
-            ]
-          });
-        } catch (e) { /* ignore */ }
+          await sendRejectionDM(requesterId, typeLabels[reqType], interaction.user.id);
+        }
         return;
       }
     }
@@ -811,8 +866,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const buildEmbed = (title, fields) => new EmbedBuilder()
         .setColor(0x2f3136)
         .setTitle(`📨 طلب جديد (${title})`)
-        .setDescription(`**من:** <@${interaction.user.id}>`)
+        .setDescription(`**من:** <@${interaction.user.id}>\n\`( ${interaction.user.username} )\``)
         .addFields(fields)
+        .setFooter({
+          text: `Submitted by ${interaction.user.username}`,
+          iconURL: interaction.user.displayAvatarURL({ dynamic: true })
+        })
         .setTimestamp();
 
       if (interaction.customId === 'leave_modal') {
@@ -822,9 +881,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.reply({ content: `❌ أدخل عدد أيام بين 1 و ${MAX_LEAVE_DAYS}.`, ephemeral: true });
         }
         const embed = buildEmbed('طلب إجازة', [
-          { name: 'المدة', value: `\`${duration} يوم\`` },
-          { name: 'السبب', value: `\`\`\`${reason}\`\`\`` },
-          { name: 'الحالة', value: '⏳ بانتظار المراجعة' }
+          { name: 'المدة', value: `\`\`\`\n${duration} ${duration === 1 ? 'يوم' : 'أيام'}\n\`\`\`` },
+          { name: 'سبب الإجازة', value: `\`\`\`\n${reason}\n\`\`\`` },
+          { name: 'الحالة', value: `\`\`\`\n⏳ بانتظار المراجعة\n\`\`\`` }
         ]);
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`req_accept_leave_${interaction.user.id}`).setLabel('قبول').setStyle(ButtonStyle.Success),
@@ -837,8 +896,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.customId === 'resign_modal') {
         const reason = interaction.fields.getTextInputValue('resign_reason');
         const embed = buildEmbed('طلب استقالة', [
-          { name: 'السبب', value: `\`\`\`${reason}\`\`\`` },
-          { name: 'الحالة', value: '⏳ بانتظار المراجعة' }
+          { name: 'سبب الاستقالة', value: `\`\`\`\n${reason}\n\`\`\`` },
+          { name: 'الحالة', value: `\`\`\`\n⏳ بانتظار المراجعة\n\`\`\`` }
         ]);
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`req_accept_resign_${interaction.user.id}`).setLabel('قبول').setStyle(ButtonStyle.Success),
@@ -851,8 +910,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.customId === 'break_modal') {
         const reason = interaction.fields.getTextInputValue('break_reason');
         const embed = buildEmbed('طلب كسر إجازة', [
-          { name: 'السبب', value: `\`\`\`${reason}\`\`\`` },
-          { name: 'الحالة', value: '⏳ بانتظار المراجعة' }
+          { name: 'سبب كسر الإجازة', value: `\`\`\`\n${reason}\n\`\`\`` },
+          { name: 'الحالة', value: `\`\`\`\n⏳ بانتظار المراجعة\n\`\`\`` }
         ]);
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`req_accept_break_${interaction.user.id}`).setLabel('قبول').setStyle(ButtonStyle.Success),
