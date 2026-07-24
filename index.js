@@ -93,6 +93,9 @@ const ADMIN_ROOM_IDS = [
   '1519516058682130632',
 ];
 
+// الرتبة المسموح لها بقبول أي جلسة (مضافة للتوضيح)
+const ALLOWED_ACCEPT_ROLE_ID = '1459304407899443396';
+
 function hasStaffRole(member) {
   return STAFF_ROLE_IDS.some((roleId) => member.roles.cache.has(roleId));
 }
@@ -313,8 +316,11 @@ async function acceptSession(guild, citizenId, adminId, message) {
     return { success: false, reason: 'الجلسة لم تعد معلقة' };
   }
 
+  // نتحقق من أن adminId موجود في قائمة المعلقين (اختياري) - لكننا نسمح لأي Staff بالقبول، لذا يمكن تخطي هذا الشرط
+  // لكننا نحتفظ به للتوافق مع الإداريين الأصليين، لكننا نضيف adminId إذا لم يكن موجوداً
   if (!session.pendingAdmins.includes(adminId)) {
-    return { success: false, reason: 'الإداري ليس في قائمة المعلقين' };
+    // نضيفه إلى القائمة (لكننا سنقوم بقبول الجلسة)
+    session.pendingAdmins.push(adminId);
   }
 
   session.status = 'accepted';
@@ -323,7 +329,21 @@ async function acceptSession(guild, citizenId, adminId, message) {
 
   const embed = EmbedBuilder.from(message.embeds[0]);
   embed.setColor(0x2ecc71);
-  embed.spliceFields(3, 1, { name: 'الحالة', value: '✅ تم القبول - جلسة نشطة', inline: false });
+  
+  // تحديث حقل "الإداري" ليعكس الإداري الجديد
+  const fields = embed.data.fields || [];
+  const adminFieldIndex = fields.findIndex(f => f.name === 'الإداري');
+  if (adminFieldIndex !== -1) {
+    fields[adminFieldIndex].value = `<@${adminId}>`;
+  }
+  // تحديث الحالة
+  const statusFieldIndex = fields.findIndex(f => f.name === 'الحالة');
+  if (statusFieldIndex !== -1) {
+    fields[statusFieldIndex].value = '✅ تم القبول - جلسة نشطة';
+  } else {
+    fields.push({ name: 'الحالة', value: '✅ تم القبول - جلسة نشطة', inline: false });
+  }
+  embed.setFields(fields);
   embed.setFooter({ text: 'جلسة نشطة', iconURL: 'attachment://server_logo.png' });
 
   const row = new ActionRowBuilder().addComponents(
@@ -354,12 +374,18 @@ async function acceptSession(guild, citizenId, adminId, message) {
     console.error('❌ تعذر إرسال رسالة القبول للمواطن:', err);
   }
 
+  // تعطيل أزرار الإداريين الآخرين
   for (const [otherAdminId, otherMessage] of Object.entries(session.messages || {})) {
     if (otherAdminId === adminId) continue;
     try {
       const otherEmbed = EmbedBuilder.from(otherMessage.embeds[0]);
       otherEmbed.setColor(0x95a5a6);
-      otherEmbed.spliceFields(3, 1, { name: 'الحالة', value: '✅ تم القبول بواسطة إداري آخر', inline: false });
+      const otherFields = otherEmbed.data.fields || [];
+      const statusIdx = otherFields.findIndex(f => f.name === 'الحالة');
+      if (statusIdx !== -1) {
+        otherFields[statusIdx].value = '✅ تم القبول بواسطة إداري آخر';
+      }
+      otherEmbed.setFields(otherFields);
       const disabledRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId('disabled')
@@ -390,7 +416,12 @@ async function rejectSession(guild, citizenId, adminId, message) {
 
   const embed = EmbedBuilder.from(message.embeds[0]);
   embed.setColor(0xe74c3c);
-  embed.spliceFields(3, 1, { name: 'الحالة', value: '❌ تم الرفض بواسطة الإداري', inline: false });
+  const fields = embed.data.fields || [];
+  const statusIdx = fields.findIndex(f => f.name === 'الحالة');
+  if (statusIdx !== -1) {
+    fields[statusIdx].value = '❌ تم الرفض بواسطة الإداري';
+  }
+  embed.setFields(fields);
   embed.setFooter({ text: 'تم رفض الجلسة', iconURL: 'attachment://server_logo.png' });
 
   const disabledRow = new ActionRowBuilder().addComponents(
@@ -675,11 +706,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.customId && interaction.customId.startsWith('accept_session_')) {
         const parts = interaction.customId.split('_');
         const citizenId = parts[2];
-        const adminId = parts[3];
+        // const adminId = parts[3]; // لم نعد نستخدمه
 
-        if (interaction.user.id !== adminId) {
+        // التحقق من الصلاحية: يجب أن يكون لديه الرتبة المحددة
+        if (!interaction.member.roles.cache.has(ALLOWED_ACCEPT_ROLE_ID)) {
           return interaction.reply({
-            content: '❌ هذا الزر مخصص لإداري آخر، لا يمكنك قبول هذه الجلسة.',
+            content: '❌ ليس لديك الصلاحية لقبول هذه الجلسة.',
             ephemeral: true
           });
         }
@@ -691,19 +723,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (session.status !== 'pending') {
           return interaction.reply({ content: '⚠️ هذه الجلسة لم تعد معلقة.', ephemeral: true });
         }
-        if (!session.pendingAdmins.includes(adminId)) {
-          return interaction.reply({ content: '⚠️ هذا الطلب لم يعد متاحاً.', ephemeral: true });
-        }
 
-        const message = session.messages ? session.messages[adminId] : interaction.message;
-        const result = await acceptSession(interaction.guild, citizenId, adminId, message);
+        // الإداري الجديد هو من ضغط على الزر
+        const newAdminId = interaction.user.id;
+        const message = interaction.message; // الرسالة التي تحتوي على الزر
+
+        // قبول الجلسة بالإداري الجديد
+        const result = await acceptSession(interaction.guild, citizenId, newAdminId, message);
         if (!result.success) {
           return interaction.reply({ content: `⚠️ ${result.reason}`, ephemeral: true });
         }
 
+        // نقل المواطن إلى روم الإداري الذي قبل
         try {
           const citizenMember = await interaction.guild.members.fetch(citizenId);
-          const adminMember = await interaction.guild.members.fetch(adminId);
+          const adminMember = await interaction.guild.members.fetch(newAdminId);
           const adminChannel = adminMember.voice.channel;
           if (adminChannel) {
             await citizenMember.voice.setChannel(adminChannel.id, 'قبول الجلسة - سحب المواطن');
