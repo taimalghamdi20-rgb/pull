@@ -73,6 +73,11 @@ const DONE_TEXT_CHANNEL_ID = '1529933848144510976';
 // روم الـ Done الصوتي لنقل المواطن إليه عند إنهاء الجلسة
 const DONE_VOICE_CHANNEL_ID_FOR_MOVE = '1499086608010449089';
 
+// ===== إعدادات الإشعار عند بقاء المواطن 5 دقائق =====
+const WAITING_NOTIFICATION_CHANNEL_ID = '1530276832203636737';
+const WAITING_MENTION_ROLE_ID = '1499102575918579793';
+const WAITING_TIMEOUT_MS = 5 * 60 * 1000; // 5 دقائق
+
 const ADMIN_ROOM_IDS = [
   '1499105265272754246',
   '1499105221383819497',
@@ -179,6 +184,7 @@ const client = new Client({
 
 const pullLocks = new Set();
 const activeSessions = new Map(); // citizenId -> { adminId, startTime, message, status, pendingAdmins, messages }
+const waitingTimers = new Map(); // userId -> { timeout, channelId, sent }
 
 // ============================================================
 // حماية روم الإجازات
@@ -600,8 +606,52 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
+  // ===== المنطق الجديد: مراقبة بقاء المواطن في غرفة الانتظار 5 دقائق =====
   const enteredWaiting = WAITING_CHANNEL_IDS.includes(newState.channelId) && !WAITING_CHANNEL_IDS.includes(oldState.channelId);
+  const leftWaiting = WAITING_CHANNEL_IDS.includes(oldState.channelId) && !WAITING_CHANNEL_IDS.includes(newState.channelId);
+
   if (enteredWaiting) {
+    const member = await guild.members.fetch(userId).catch(() => null);
+    if (member && !hasStaffRole(member)) {
+      // إلغاء أي مؤقت قديم لنفس العضو (احتياطي)
+      const oldEntry = waitingTimers.get(userId);
+      if (oldEntry) clearTimeout(oldEntry.timeout);
+
+      // بدء مؤقت جديد
+      const timer = setTimeout(async () => {
+        // التأكد من أن العضو لا يزال في نفس الغرفة ولم يغادر
+        const currentMember = await guild.members.fetch(userId).catch(() => null);
+        if (!currentMember) return;
+        const voiceChannel = currentMember.voice.channel;
+        if (!voiceChannel || !WAITING_CHANNEL_IDS.includes(voiceChannel.id)) return;
+        // التأكد من أنه ما زال ليس Staff (احتياطي)
+        if (hasStaffRole(currentMember)) return;
+
+        // إرسال الإشعار
+        const channel = guild.channels.cache.get(WAITING_NOTIFICATION_CHANNEL_ID);
+        if (channel) {
+          await channel.send(`<@&${WAITING_MENTION_ROLE_ID}> يوجد شخص في الانتظار، يرجى التوجه لخدمته.`);
+        }
+        // تعيين علامة الإرسال
+        const entry = waitingTimers.get(userId);
+        if (entry) entry.sent = true;
+      }, WAITING_TIMEOUT_MS);
+
+      waitingTimers.set(userId, { timeout: timer, channelId: newState.channelId, sent: false });
+    }
+  }
+
+  if (leftWaiting) {
+    const entry = waitingTimers.get(userId);
+    if (entry) {
+      clearTimeout(entry.timeout);
+      waitingTimers.delete(userId);
+    }
+  }
+
+  // ===== المنطق الأصلي للسحب التلقائي =====
+  const enteredWaitingOriginal = WAITING_CHANNEL_IDS.includes(newState.channelId) && !WAITING_CHANNEL_IDS.includes(oldState.channelId);
+  if (enteredWaitingOriginal) {
     const member = await guild.members.fetch(userId).catch(() => null);
     if (member && !hasStaffRole(member)) {
       await tryPullForAllFreeAdmins(guild);
