@@ -176,7 +176,6 @@ const client = new Client({
 
 const pullLocks = new Set();
 const activeSessions = new Map();
-const pendingRequests = new Set(); // ✅ تخزين معرفات المواطنين الذين لديهم طلب معلق
 
 // ============================================================
 // حماية روم الإجازات
@@ -204,10 +203,7 @@ function getNextEligibleWaitingMember(guild) {
     const waitingChannel = guild.channels.cache.get(waitingId);
     if (!waitingChannel || !waitingChannel.members) continue;
     for (const [, member] of waitingChannel.members) {
-      // ✅ نتحقق من أن المواطن ليس لديه طلب معلق أو جلسة نشطة
-      if (!pendingRequests.has(member.id) && !activeSessions.has(member.id)) {
-        return member;
-      }
+      return member;
     }
   }
   return null;
@@ -319,9 +315,6 @@ async function acceptSession(guild, citizenId, adminId, message) {
 
   await message.edit({ embeds: [embed], components: [row] });
 
-  // ✅ إزالة المواطن من قائمة الطلبات المعلقة
-  pendingRequests.delete(citizenId);
-
   try {
     const citizenUser = await client.users.fetch(citizenId);
     const embedNotify = new EmbedBuilder()
@@ -360,9 +353,6 @@ async function rejectSession(guild, citizenId, adminId, message) {
   );
 
   await message.edit({ embeds: [embed], components: [disabledRow] });
-
-  // ✅ إزالة المواطن من قائمة الطلبات المعلقة
-  pendingRequests.delete(citizenId);
 
   try {
     const citizenUser = await client.users.fetch(citizenId);
@@ -414,9 +404,6 @@ async function endSession(guild, citizenId, adminId, startTime, message) {
 
   await message.edit({ embeds: [embed], components: [disabledRow] });
 
-  // ✅ إزالة المواطن من قائمة الطلبات المعلقة (للتأكيد)
-  pendingRequests.delete(citizenId);
-
   try {
     const citizenUser = await client.users.fetch(citizenId);
     const logMsgId = message.id;
@@ -440,7 +427,7 @@ async function endSession(guild, citizenId, adminId, startTime, message) {
 }
 
 // ============================================================
-// نظام السحب التلقائي (مع إرسال طلب القبول)
+// نظام السحب التلقائي (مع إرسال طلب القبول - رسالة واحدة فقط)
 // ============================================================
 async function tryPullForAllFreeAdmins(guild) {
   for (const roomId of ADMIN_ROOM_IDS) {
@@ -452,14 +439,14 @@ async function tryPullForAllFreeAdmins(guild) {
     const candidate = getNextEligibleWaitingMember(guild);
     if (!candidate) continue;
 
+    // ✅ التحقق من أن المواطن ليس لديه جلسة معلقة مسبقاً (لمنع السبام)
+    if (activeSessions.has(candidate.id)) continue;
+
     pullLocks.add(channel.id);
     try {
       const adminMember = channel.members.first();
       
       await sendCitizenNotification(candidate.user, adminMember.user);
-
-      // ✅ تخزين المواطن في قائمة الطلبات المعلقة
-      pendingRequests.add(candidate.id);
 
       activeSessions.set(candidate.id, {
         adminId: adminMember.id,
@@ -477,8 +464,6 @@ async function tryPullForAllFreeAdmins(guild) {
 
     } catch (err) {
       console.error(`⚠️ فشل إرسال طلب الدعم لـ ${candidate.user.tag}:`, err.message);
-      // في حالة الفشل، نزيل المواطن من قائمة الطلبات المعلقة
-      pendingRequests.delete(candidate.id);
     } finally {
       pullLocks.delete(channel.id);
     }
@@ -531,7 +516,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
   const session = activeSessions.get(userId);
 
-  // إذا كانت الجلسة في حالة "accepted" (نشطة)
   if (session && session.status === 'accepted') {
     const wasInAdminRoom = oldState.channelId && ADMIN_ROOM_IDS.includes(oldState.channelId);
     const isInAdminRoom = newState.channelId && ADMIN_ROOM_IDS.includes(newState.channelId);
@@ -544,37 +528,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  // ✅ إذا غادر المواطن روم الانتظار وكان لديه طلب معلق، نحذف الطلب
-  if (pendingRequests.has(userId) && 
-      WAITING_CHANNEL_IDS.includes(oldState.channelId) && 
-      !WAITING_CHANNEL_IDS.includes(newState.channelId)) {
-    // إذا غادر المواطن روم الانتظار قبل قبول أو رفض طلبه
-    const session = activeSessions.get(userId);
-    if (session && session.status === 'pending' && session.message) {
-      // تحديث رسالة الطلب في روم الـ Done
-      const embed = EmbedBuilder.from(session.message.embeds[0]);
-      embed.setColor(0xe74c3c);
-      embed.spliceFields(3, 1, { name: 'الحالة', value: '❌ تم الإلغاء (غادر المواطن)', inline: false });
-      embed.setFooter({ text: 'تم إلغاء الطلب', iconURL: 'attachment://server_logo.png' });
-      
-      const disabledRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId('disabled')
-          .setLabel('تم الإلغاء')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(true)
-      );
-      
-      try {
-        await session.message.edit({ embeds: [embed], components: [disabledRow] });
-      } catch (e) { /* ignore */ }
-    }
-    
-    pendingRequests.delete(userId);
-    activeSessions.delete(userId);
-  }
-
-  // محاولة السحب التلقائي
   try {
     await tryPullForAllFreeAdmins(guild);
   } catch (err) {
@@ -815,7 +768,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 }
               }
             } else if (reqType === 'resign') {
+              // ✅ حذف الرتب وحذف النيك نيم عند قبول الاستقالة
               await target.roles.set([RESIGNATION_KEEP_ROLE_ID]);
+              try {
+                await target.setNickname(null, 'تم قبول الاستقالة - حذف النيك نيم');
+              } catch (nickErr) {
+                console.error('⚠️ فشل حذف النيك نيم:', nickErr);
+              }
             } else if (reqType === 'break') {
               if (target.roles.cache.has(LEAVE_ROLE_ID)) {
                 await target.roles.remove(LEAVE_ROLE_ID);
