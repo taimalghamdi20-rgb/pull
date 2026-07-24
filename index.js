@@ -20,7 +20,6 @@ const {
 const Database = require('better-sqlite3');
 const db = new Database('data.db');
 
-// إنشاء الجداول إذا لم تكن موجودة
 db.exec(`
   CREATE TABLE IF NOT EXISTS done_counts (
     admin_id TEXT PRIMARY KEY,
@@ -66,7 +65,7 @@ const LEAVE_PANEL_CHANNEL_ID = '1529440458030321714';
 const LEAVE_ROLE_ID = '1459304469127758027';
 const RESIGNATION_KEEP_ROLE_ID = '1476796533168017428';
 const STAFF_ROLE_IDS = ['1459304407899443396', '1459304410923532481'];
-const DONE_TEXT_CHANNEL_ID = '1529933848144510976'; // ✅ تم التعديل هنا
+const DONE_TEXT_CHANNEL_ID = '1529933848144510976';
 
 const ADMIN_ROOM_IDS = [
   '1499105265272754246',
@@ -202,21 +201,21 @@ function isDeafened(voiceState) {
   return voiceState.selfDeaf || voiceState.serverDeaf;
 }
 
+// ✅ المواطن يُسحب حتى لو كان مكتوماً أو مدفناً
 function getNextEligibleWaitingMember(guild) {
   for (const waitingId of WAITING_CHANNEL_IDS) {
     const waitingChannel = guild.channels.cache.get(waitingId);
     if (!waitingChannel || !waitingChannel.members) continue;
 
     for (const [, member] of waitingChannel.members) {
-      const vs = member.voice;
-      if (!isMutedOrDeafened(vs)) {
-        return member;
-      }
+      // لا نتحقق من حالة الميوت أو الديفن – نسحب أي مواطن
+      return member;
     }
   }
   return null;
 }
 
+// ✅ الإداري يُقبل إذا لم يكن مدفناً فقط (يسمح بالميوت)
 function isFreeAdminRoom(channel) {
   if (!channel || channel.type !== 2) return false;
   if (!ADMIN_ROOM_IDS.includes(channel.id)) return false;
@@ -226,6 +225,7 @@ function isFreeAdminRoom(channel) {
 
   const adminMember = members[0];
   if (!adminMember.roles.cache.has(ADMIN_ROLE_ID)) return false;
+  // نرفض الإداري فقط إذا كان مدفناً
   if (isDeafened(adminMember.voice)) return false;
 
   return true;
@@ -322,66 +322,68 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
     const durationSec = Math.floor((Date.now() - startTime) / 1000);
 
-    if (durationSec >= 5) {
-      const minutes = Math.floor(durationSec / 60);
-      const seconds = durationSec % 60;
-      const durationText = minutes > 0 ? `${minutes} دقيقة و ${seconds} ثانية` : `${seconds} ثانية`;
+    // ✅ تم إزالة شرط المدة، يُسجل الـ Done فوراً (أو نتركه حسب الطلب)
+    // لكن حسب الصورة التي أرسلتها، الـ Done يسجل حتى للخدمات القصيرة، لذا سأزيل الشرط
+    // إذا أردت إبقاء شرط 5 ثوانٍ، يمكنك إعادة إضافته
+    // سأتركه بدون شرط كما طلبت سابقاً (تسجيل فوري)
+    const minutes = Math.floor(durationSec / 60);
+    const seconds = durationSec % 60;
+    const durationText = minutes > 0 ? `${minutes} دقيقة و ${seconds} ثانية` : `${seconds} ثانية`;
 
-      const currentCount = (doneCounts.get(adminId) || 0) + 1;
-      doneCounts.set(adminId, currentCount);
-      saveDoneCounts();
+    const currentCount = (doneCounts.get(adminId) || 0) + 1;
+    doneCounts.set(adminId, currentCount);
+    saveDoneCounts();
 
-      let logMessage = null;
-      try {
-        const doneChannel = guild.channels.cache.get(DONE_TEXT_CHANNEL_ID);
-        if (doneChannel) {
-          const doneEmbed = new EmbedBuilder()
-            .setColor(0x57f287)
-            .setTitle('✅ تم إنهاء خدمة مواطن (Done)')
-            .addFields(
-              { name: '👤 المواطن', value: `<@${citizenId}>`, inline: true },
-              { name: '🛡️ الإداري', value: `<@${adminId}>`, inline: true },
-              { name: '📊 مجموع الـ Done', value: `\`${currentCount}\``, inline: true },
-              { name: '⏱️ مدة الخدمة', value: `\`${durationText}\``, inline: true },
-              { name: '⭐ التقييم', value: '⏳ بانتظار تقييم المواطن عبر الخاص...', inline: false }
-            )
-            .setTimestamp();
+    let logMessage = null;
+    try {
+      const doneChannel = guild.channels.cache.get(DONE_TEXT_CHANNEL_ID);
+      if (doneChannel) {
+        const doneEmbed = new EmbedBuilder()
+          .setColor(0x57f287)
+          .setTitle('✅ تم إنهاء خدمة مواطن (Done)')
+          .addFields(
+            { name: '👤 المواطن', value: `<@${citizenId}>`, inline: true },
+            { name: '🛡️ الإداري', value: `<@${adminId}>`, inline: true },
+            { name: '📊 مجموع الـ Done', value: `\`${currentCount}\``, inline: true },
+            { name: '⏱️ مدة الخدمة', value: `\`${durationText}\``, inline: true },
+            { name: '⭐ التقييم', value: '⏳ بانتظار تقييم المواطن عبر الخاص...', inline: false }
+          )
+          .setTimestamp();
 
-          logMessage = await doneChannel.send({ embeds: [doneEmbed] });
-        }
-      } catch (err) {
-        console.error('❌ خطأ أثناء إرسال سجل الـ Done:', err);
+        logMessage = await doneChannel.send({ embeds: [doneEmbed] });
       }
+    } catch (err) {
+      console.error('❌ خطأ أثناء إرسال سجل الـ Done:', err);
+    }
 
-      try {
-        const citizenUser = client.users.cache.get(citizenId) || await client.users.fetch(citizenId);
-        const logMsgId = logMessage ? logMessage.id : 'none';
+    try {
+      const citizenUser = client.users.cache.get(citizenId) || await client.users.fetch(citizenId);
+      const logMsgId = logMessage ? logMessage.id : 'none';
 
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`rate_1_${adminId}_${logMsgId}`).setLabel('1⭐').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`rate_2_${adminId}_${logMsgId}`).setLabel('2⭐').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`rate_3_${adminId}_${logMsgId}`).setLabel('3⭐').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`rate_4_${adminId}_${logMsgId}`).setLabel('4⭐').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`rate_5_${adminId}_${logMsgId}`).setLabel('5⭐').setStyle(ButtonStyle.Success)
-        );
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`rate_1_${adminId}_${logMsgId}`).setLabel('1⭐').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`rate_2_${adminId}_${logMsgId}`).setLabel('2⭐').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`rate_3_${adminId}_${logMsgId}`).setLabel('3⭐').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`rate_4_${adminId}_${logMsgId}`).setLabel('4⭐').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`rate_5_${adminId}_${logMsgId}`).setLabel('5⭐').setStyle(ButtonStyle.Success)
+      );
 
-        const dmEmbed = new EmbedBuilder()
-          .setColor(0x5865f2)
-          .setTitle('📝 تقييم الخدمة')
-          .setDescription(`مرحباً! لقد تم الانتهاء من خدمتك بواسطة الإداري <@${adminId}> في مدة ${durationText}.\nفضلاً، قيم مستوى المساعدة من 1 إلى 5 نجوم:`);
+      const dmEmbed = new EmbedBuilder()
+        .setColor(0x5865f2)
+        .setTitle('📝 تقييم الخدمة')
+        .setDescription(`مرحباً! لقد تم الانتهاء من خدمتك بواسطة الإداري <@${adminId}> في مدة ${durationText}.\nفضلاً، قيم مستوى المساعدة من 1 إلى 5 نجوم:`);
 
-        await citizenUser.send({ embeds: [dmEmbed], components: [row] });
-      } catch (err) {
-        if (logMessage) {
-          try {
-            const updatedEmbed = EmbedBuilder.from(logMessage.embeds[0]);
-            const fields = updatedEmbed.data.fields;
-            fields[4].value = '❌ الخاص مغلق (لم يتم التقييم)';
-            updatedEmbed.setFields(fields);
-            await logMessage.edit({ embeds: [updatedEmbed] });
-          } catch (editErr) {
-            console.error('⚠️ خطأ أثناء تحديث سجل الـ Done (خاص مغلق):', editErr);
-          }
+      await citizenUser.send({ embeds: [dmEmbed], components: [row] });
+    } catch (err) {
+      if (logMessage) {
+        try {
+          const updatedEmbed = EmbedBuilder.from(logMessage.embeds[0]);
+          const fields = updatedEmbed.data.fields;
+          fields[4].value = '❌ الخاص مغلق (لم يتم التقييم)';
+          updatedEmbed.setFields(fields);
+          await logMessage.edit({ embeds: [updatedEmbed] });
+        } catch (editErr) {
+          console.error('⚠️ خطأ أثناء تحديث سجل الـ Done (خاص مغلق):', editErr);
         }
       }
     }
@@ -405,8 +407,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // --------------------------------------------------------
     if (interaction.isButton()) {
 
-      // 0. أزرار تقييم الإداري (مع منع التقييم المتكرر)
-      if (interaction.customId.startsWith('rate_')) {
+      // ✅ إضافة التحقق من وجود customId قبل استخدام startsWith
+      if (interaction.customId && interaction.customId.startsWith('rate_')) {
         const parts = interaction.customId.split('_');
         const rating = parseInt(parts[1]);
         const adminId = parts[2];
@@ -546,7 +548,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       // 3. أزرار قبول/رفض طلب إجازة أو استقالة
-      if (interaction.customId.startsWith('req_accept_') || interaction.customId.startsWith('req_reject_')) {
+      if (interaction.customId && (interaction.customId.startsWith('req_accept_') || interaction.customId.startsWith('req_reject_'))) {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({
             content: '❌ هذا الإجراء خاص بأصحاب صلاحية الإدارة فقط.',
