@@ -16,25 +16,21 @@ const {
   AttachmentBuilder,
 } = require('discord.js');
 
-// ===== قاعدة بيانات SQLite =====
-const Database = require('better-sqlite3');
-const db = new Database('data.db');
+// ===== قاعدة بيانات Supabase =====
+const { createClient } = require('@supabase/supabase-js');
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS done_counts (
-    admin_id TEXT PRIMARY KEY,
-    count INTEGER DEFAULT 0
-  );
-  CREATE TABLE IF NOT EXISTS active_leaves (
-    user_id TEXT PRIMARY KEY,
-    end_date INTEGER
-  );
-  CREATE TABLE IF NOT EXISTS evaluated_logs (
-    log_id TEXT PRIMARY KEY
-  );
-`);
+// قراءة متغيرات Supabase من البيئة
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
-// ===== المتغيرات البيئية =====
+if (!SUPABASE_URL || !SUPABASE_KEY) {
+  console.error('❌ تأكد من تعبئة SUPABASE_URL و SUPABASE_KEY في متغيرات البيئة');
+  process.exit(1);
+}
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ===== المتغيرات البيئية الأساسية =====
 const {
   BOT_TOKEN,
   GUILD_ID,
@@ -69,8 +65,6 @@ const LEAVE_ROLE_ID = '1459304469127758027';
 const RESIGNATION_KEEP_ROLE_ID = '1476796533168017428';
 const STAFF_ROLE_IDS = ['1459304407899443396', '1459304410923532481'];
 const DONE_TEXT_CHANNEL_ID = '1529933848144510976';
-
-// روم الـ Done الصوتي لنقل المواطن إليه عند إنهاء الجلسة
 const DONE_VOICE_CHANNEL_ID_FOR_MOVE = '1499086608010449089';
 
 const ADMIN_ROOM_IDS = [
@@ -92,55 +86,84 @@ function hasStaffRole(member) {
   return STAFF_ROLE_IDS.some((roleId) => member.roles.cache.has(roleId));
 }
 
-// ===== دوال قاعدة البيانات =====
-function loadDoneCounts() {
-  const stmt = db.prepare('SELECT admin_id, count FROM done_counts');
-  const rows = stmt.all();
+// ============================================================
+// دوال قاعدة البيانات (المعدلة لـ Supabase)
+// ============================================================
+
+// 1. تحميل إحصائيات الـ Done
+async function loadDoneCounts() {
+  const { data, error } = await supabase.from('done_counts').select('*');
+  if (error) {
+    console.error('❌ خطأ في تحميل done_counts:', error);
+    return new Map();
+  }
   const map = new Map();
-  for (const row of rows) map.set(row.admin_id, row.count);
+  for (const row of data) map.set(row.admin_id, row.count);
   return map;
 }
 
-function saveDoneCounts() {
-  db.prepare('DELETE FROM done_counts').run();
-  const insert = db.prepare('INSERT INTO done_counts (admin_id, count) VALUES (?, ?)');
-  const trans = db.transaction((entries) => {
-    for (const [id, count] of entries) insert.run(id, count);
-  });
-  trans(doneCounts.entries());
+// 2. حفظ إحصائيات الـ Done (حذف وإدراج جديد)
+async function saveDoneCounts(doneMap) {
+  // 1. حذف الكل
+  await supabase.from('done_counts').delete().neq('admin_id', '');
+  
+  // 2. إدراج الكل
+  const entries = Array.from(doneMap.entries());
+  if (entries.length === 0) return;
+  
+  const rows = entries.map(([admin_id, count]) => ({ admin_id, count }));
+  const { error } = await supabase.from('done_counts').insert(rows);
+  if (error) console.error('❌ خطأ في حفظ done_counts:', error);
 }
 
-function loadActiveLeaves() {
-  const stmt = db.prepare('SELECT user_id, end_date FROM active_leaves');
-  const rows = stmt.all();
+// 3. تحميل الإجازات النشطة
+async function loadActiveLeaves() {
+  const { data, error } = await supabase.from('active_leaves').select('*');
+  if (error) {
+    console.error('❌ خطأ في تحميل active_leaves:', error);
+    return new Map();
+  }
   const map = new Map();
-  for (const row of rows) map.set(row.user_id, { endDate: row.end_date });
+  for (const row of data) map.set(row.user_id, { endDate: row.end_date });
   return map;
 }
 
-function saveActiveLeaves() {
-  db.prepare('DELETE FROM active_leaves').run();
-  const insert = db.prepare('INSERT INTO active_leaves (user_id, end_date) VALUES (?, ?)');
-  const trans = db.transaction((entries) => {
-    for (const [userId, data] of entries) insert.run(userId, data.endDate);
-  });
-  trans(activeLeaves.entries());
+// 4. حفظ الإجازات النشطة
+async function saveActiveLeaves(leavesMap) {
+  await supabase.from('active_leaves').delete().neq('user_id', '');
+  
+  const entries = Array.from(leavesMap.entries());
+  if (entries.length === 0) return;
+  
+  const rows = entries.map(([user_id, data]) => ({ user_id, end_date: data.endDate }));
+  const { error } = await supabase.from('active_leaves').insert(rows);
+  if (error) console.error('❌ خطأ في حفظ active_leaves:', error);
 }
 
-// دوال التقييم المكرر
-function isLogEvaluated(logId) {
-  const stmt = db.prepare('SELECT log_id FROM evaluated_logs WHERE log_id = ?');
-  return stmt.get(logId) !== undefined;
+// 5. التحقق من تقييم مكرر
+async function isLogEvaluated(logId) {
+  const { data, error } = await supabase
+    .from('evaluated_logs')
+    .select('log_id')
+    .eq('log_id', logId);
+  if (error) {
+    console.error('❌ خطأ في التحقق من التقييم:', error);
+    return false;
+  }
+  return data.length > 0;
 }
 
-function markLogEvaluated(logId) {
-  const stmt = db.prepare('INSERT OR IGNORE INTO evaluated_logs (log_id) VALUES (?)');
-  stmt.run(logId);
+// 6. تسجيل تقييم
+async function markLogEvaluated(logId) {
+  const { error } = await supabase
+    .from('evaluated_logs')
+    .insert({ log_id: logId });
+  if (error) console.error('❌ خطأ في تسجيل التقييم:', error);
 }
 
-// تحميل البيانات
-const doneCounts = loadDoneCounts();
-const activeLeaves = loadActiveLeaves();
+// ===== تحميل البيانات (مع await) =====
+let doneCounts = new Map();
+let activeLeaves = new Map();
 
 // ===== دوال مساعدة =====
 function ratingStarsBar(rating) {
@@ -178,7 +201,7 @@ const client = new Client({
 });
 
 const pullLocks = new Set();
-const activeSessions = new Map(); // citizenId -> { adminId, startTime, message, status, pendingAdmins, messages }
+const activeSessions = new Map();
 
 // ============================================================
 // حماية روم الإجازات
@@ -412,7 +435,7 @@ async function rejectSession(guild, citizenId, adminId, message) {
 }
 
 // ============================================================
-// ✅ دالة إنهاء الجلسة (مع تعديل الحقول لمنع التكرار)
+// دالة إنهاء الجلسة (مع تعديل الحقول لمنع التكرار)
 // ============================================================
 async function endSession(guild, citizenId, adminId, startTime, message) {
   const durationSec = Math.floor((Date.now() - startTime) / 1000);
@@ -422,15 +445,13 @@ async function endSession(guild, citizenId, adminId, startTime, message) {
 
   const currentCount = (doneCounts.get(adminId) || 0) + 1;
   doneCounts.set(adminId, currentCount);
-  saveDoneCounts();
+  await saveDoneCounts(doneCounts);
 
   const embed = EmbedBuilder.from(message.embeds[0]);
 
-  // أخذ الحقول الثلاثة الأولى (اللاعب، الإداري، الوقت)
   const currentFields = embed.data.fields || [];
   const baseFields = currentFields.slice(0, 3);
 
-  // بناء الحقول الجديدة
   const newFields = [
     ...baseFields,
     { name: 'الحالة', value: '✅ تم الانتهاء', inline: false },
@@ -452,15 +473,12 @@ async function endSession(guild, citizenId, adminId, startTime, message) {
 
   await message.edit({ embeds: [embed], components: [disabledRow] });
 
-  // نقل المواطن إلى روم الـ Done الصوتي
   try {
     const citizenMember = await guild.members.fetch(citizenId);
     const doneVoiceChannel = guild.channels.cache.get(DONE_VOICE_CHANNEL_ID_FOR_MOVE);
     if (doneVoiceChannel && citizenMember.voice.channel) {
       await citizenMember.voice.setChannel(doneVoiceChannel.id, 'إنهاء الجلسة - نقل إلى روم الـ Done');
       console.log(`✅ تم نقل ${citizenMember.user.tag} إلى روم الـ Done الصوتي`);
-    } else if (!doneVoiceChannel) {
-      console.warn(`⚠️ روم الـ Done الصوتي (${DONE_VOICE_CHANNEL_ID_FOR_MOVE}) غير موجود`);
     }
   } catch (err) {
     console.error('⚠️ فشل نقل المواطن إلى روم الـ Done:', err);
@@ -489,7 +507,7 @@ async function endSession(guild, citizenId, adminId, startTime, message) {
 }
 
 // ============================================================
-// نظام السحب التلقائي (المعدل) - إرسال طلب لكل الإداريين الفاضيين
+// نظام السحب التلقائي
 // ============================================================
 async function tryPullForAllFreeAdmins(guild) {
   const freeAdmins = [];
@@ -507,7 +525,6 @@ async function tryPullForAllFreeAdmins(guild) {
   if (!candidate) return;
 
   if (activeSessions.has(candidate.id)) return;
-
   if (pullLocks.has(candidate.id)) return;
   pullLocks.add(candidate.id);
 
@@ -545,6 +562,12 @@ async function tryPullForAllFreeAdmins(guild) {
 // ============================================================
 client.once(Events.ClientReady, async (c) => {
   console.log(`🤖 البوت شغال باسم ${c.user.tag}`);
+  
+  // تحميل البيانات من Supabase
+  doneCounts = await loadDoneCounts();
+  activeLeaves = await loadActiveLeaves();
+  console.log('✅ تم تحميل البيانات من Supabase');
+
   try {
     const commands = [
       { name: 'send_leave_panel', description: 'إرسال لوحة طلبات الإجازات والاستقالات' },
@@ -574,6 +597,8 @@ client.once(Events.ClientReady, async (c) => {
   } catch (error) {
     console.error('❌ خطأ في تسجيل الأوامر:', error);
   }
+
+  await cleanExpiredLeaves();
 });
 
 // ============================================================
@@ -616,7 +641,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 });
 
 // ============================================================
-// معالج التفاعلات (الكامل)
+// معالج التفاعلات (الأزرار، المودالات، الأوامر)
 // ============================================================
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
@@ -726,11 +751,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const logMsgId = parts[3];
         const stars = ratingStarsBar(rating);
 
-        if (isLogEvaluated(logMsgId)) {
+        if (await isLogEvaluated(logMsgId)) {
           return interaction.reply({ content: '⚠️ تم التقييم مسبقاً.', ephemeral: true });
         }
 
-        markLogEvaluated(logMsgId);
+        await markLogEvaluated(logMsgId);
         await interaction.update({ content: `✅ شكراً! (${stars})`, embeds: [], components: [] });
 
         try {
@@ -770,7 +795,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      // ===== أزرار الإجازات والاستقالات (نفس الكود السابق) =====
+      // ===== أزرار الإجازات والاستقالات =====
       if (interaction.customId === 'open_leave_modal') {
         const modal = new ModalBuilder()
           .setCustomId('leave_modal')
@@ -872,7 +897,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 if (match) {
                   const days = parseInt(match[0]);
                   activeLeaves.set(requesterId, { endDate: Date.now() + days * 24*60*60*1000 });
-                  saveActiveLeaves();
+                  await saveActiveLeaves(activeLeaves);
                 }
               }
             } else if (reqType === 'resign') {
@@ -888,7 +913,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
               }
               if (activeLeaves.has(requesterId)) {
                 activeLeaves.delete(requesterId);
-                saveActiveLeaves();
+                await saveActiveLeaves(activeLeaves);
               }
             }
           } catch (e) { console.error('⚠️ خطأ في تعديل الرتب:', e); }
@@ -1005,7 +1030,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         let index = 1;
         for (const [userId, data] of activeLeaves) {
           const remaining = data.endDate - Date.now();
-          if (remaining <= 0) { activeLeaves.delete(userId); saveActiveLeaves(); continue; }
+          if (remaining <= 0) { 
+            activeLeaves.delete(userId); 
+            await saveActiveLeaves(activeLeaves);
+            continue; 
+          }
           const days = Math.floor(remaining / (1000*60*60*24));
           const hours = Math.floor((remaining % (1000*60*60*24)) / (1000*60*60));
           desc += `**${index}.** <@${userId}> — متبقي: \`${days} يوم و ${hours} ساعة\`\n`;
@@ -1040,7 +1069,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const amount = interaction.options.getInteger('amount');
         const current = doneCounts.get(admin.id) || 0;
         doneCounts.set(admin.id, current + amount);
-        saveDoneCounts();
+        await saveDoneCounts(doneCounts);
         return interaction.reply({ content: `✅ تم إضافة ${amount} إلى <@${admin.id}>. المجموع: ${current + amount}`, ephemeral: true });
       }
 
@@ -1051,14 +1080,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const current = doneCounts.get(admin.id) || 0;
         const newCount = Math.max(0, current - amount);
         doneCounts.set(admin.id, newCount);
-        saveDoneCounts();
+        await saveDoneCounts(doneCounts);
         return interaction.reply({ content: `✅ تم خصم ${amount} من <@${admin.id}>. المجموع: ${newCount}`, ephemeral: true });
       }
 
       if (interaction.commandName === 'reset_all') {
         if (!hasStaffRole(interaction.member)) return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
         doneCounts.clear();
-        saveDoneCounts();
+        await saveDoneCounts(doneCounts);
         return interaction.reply({ content: '🧹 تم تصفير جميع الإحصائيات.', ephemeral: true });
       }
     }
@@ -1071,20 +1100,58 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 // ============================================================
+// وظائف الصيانة
+// ============================================================
+async function cleanExpiredLeaves() {
+  const now = Date.now();
+  let expiredCount = 0;
+  for (const [userId, leaveData] of activeLeaves) {
+    if (now > leaveData.endDate) {
+      activeLeaves.delete(userId);
+      expiredCount++;
+    }
+  }
+  if (expiredCount > 0) {
+    await saveActiveLeaves(activeLeaves);
+    console.log(`🧹 تم تنظيف ${expiredCount} إجازة منتهية.`);
+  }
+}
+
+function scheduleDailyMaintenance() {
+  setInterval(async () => {
+    const now = new Date();
+    const hours = now.getHours();
+    const minutes = now.getMinutes();
+    if (hours === 0 && minutes === 0) {
+      console.log('⏰ الساعة 12 صباحاً - تنفيذ الصيانة اليومية...');
+      await cleanExpiredLeaves();
+      // إعادة تحميل البيانات من Supabase للتحديث
+      doneCounts = await loadDoneCounts();
+      activeLeaves = await loadActiveLeaves();
+      console.log('✅ تم تحديث البيانات من Supabase.');
+    }
+  }, 60 * 1000);
+}
+
+// ============================================================
 // حفظ البيانات عند الإغلاق
 // ============================================================
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
   console.log('🔄 حفظ البيانات...');
-  saveDoneCounts();
-  saveActiveLeaves();
+  await saveDoneCounts(doneCounts);
+  await saveActiveLeaves(activeLeaves);
   process.exit(0);
 });
 
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   console.log('🔄 حفظ البيانات...');
-  saveDoneCounts();
-  saveActiveLeaves();
+  await saveDoneCounts(doneCounts);
+  await saveActiveLeaves(activeLeaves);
   process.exit(0);
 });
 
+// ============================================================
+// بدء الجدولة اليومية وتشغيل البوت
+// ============================================================
+scheduleDailyMaintenance();
 client.login(BOT_TOKEN);
