@@ -175,7 +175,7 @@ const client = new Client({
 });
 
 const pullLocks = new Set();
-const activeSessions = new Map(); // citizenId -> { adminId, startTime, message, status, pendingAdmins: [] }
+const activeSessions = new Map(); // citizenId -> { adminId, startTime, message, status, pendingAdmins, messages }
 
 // ============================================================
 // حماية روم الإجازات
@@ -294,36 +294,28 @@ async function sendSessionRequest(guild, citizen, admin) {
   return message;
 }
 
-// ✅ دالة إلغاء طلبات الإداريين الآخرين عند قبول أحدهم
-async function cancelOtherRequests(guild, citizenId, acceptedAdminId, acceptedMessageId) {
-  const session = activeSessions.get(citizenId);
-  if (!session) return;
-
-  // جلب جميع رسائل الطلبات المرسلة للإداريين الآخرين
-  for (const adminId of session.pendingAdmins) {
-    if (adminId === acceptedAdminId) continue;
-    // البحث عن الرسالة المرسلة لذلك الإداري (نخزنها في session)
-    // لكننا لم نخزنها، لذا سنبحث في روم الـ Done عن الرسائل التي تحمل نفس citizenId و adminId
-    // بدلاً من ذلك، نقوم بتحديث حالة الجلسة ونترك الأزرار كما هي (لكن عند الضغط عليها ستظهر "تم قبولها من قبل آخر")
-    // لكن لتجربة أفضل، سنقوم بتعديل الأزرار في رسائل الإداريين الآخرين
-    // ولكننا لا نخزن مراجع للرسائل، لذلك سنستخدم منطق عدم السماح بالقبول إذا كانت الجلسة قد قُبلت
-    // وهو ما يتحقق في معالج الأزرار (التحقق من session.status)
-  }
-  // لتجنب التعقيد، سنترك الأزرار كما هي ولكن عند الضغط عليها سيظهر "تم قبول الجلسة من قبل إداري آخر"
-}
-
+// ✅ دالة قبول الجلسة (لن يقبلها إلا الإداري المستهدف)
 async function acceptSession(guild, citizenId, adminId, message) {
   const session = activeSessions.get(citizenId);
-  if (!session) return;
-
-  // ✅ منع القبول إذا كانت الجلسة قد انتهت أو قُبلت مسبقاً
-  if (session.status !== 'pending') {
-    return false;
+  if (!session) {
+    return { success: false, reason: 'الجلسة غير موجودة' };
   }
 
+  if (session.status !== 'pending') {
+    return { success: false, reason: 'الجلسة لم تعد معلقة' };
+  }
+
+  // التأكد من أن الإداري لا يزال في قائمة المعلقين
+  if (!session.pendingAdmins.includes(adminId)) {
+    return { success: false, reason: 'الإداري ليس في قائمة المعلقين' };
+  }
+
+  // تحديث حالة الجلسة
   session.status = 'accepted';
   session.startTime = Date.now();
+  session.adminId = adminId;
 
+  // تحديث رسالة الإداري الذي قبل
   const embed = EmbedBuilder.from(message.embeds[0]);
   embed.setColor(0x2ecc71);
   embed.spliceFields(3, 1, { name: 'الحالة', value: '✅ تم القبول - جلسة نشطة', inline: false });
@@ -358,20 +350,43 @@ async function acceptSession(guild, citizenId, adminId, message) {
     console.error('❌ تعذر إرسال رسالة القبول للمواطن:', err);
   }
 
-  // ✅ تحديث رسائل الإداريين الآخرين (إذا كان لدينا مراجع لها)
-  // ولكن لعدم حفظ المراجع، سنتركها كما هي، وعند الضغط عليها سترفض لأن الجلسة لم تعد pending
-  return true;
-}
-
-async function rejectSession(guild, citizenId, adminId, message) {
-  const session = activeSessions.get(citizenId);
-  if (!session) return;
-
-  // إذا كانت الجلسة قد قُبلت أو انتهت، لا نسمح بالرفض
-  if (session.status !== 'pending') {
-    return false;
+  // تعطيل أزرار الإداريين الآخرين
+  for (const [otherAdminId, otherMessage] of Object.entries(session.messages || {})) {
+    if (otherAdminId === adminId) continue;
+    try {
+      const otherEmbed = EmbedBuilder.from(otherMessage.embeds[0]);
+      otherEmbed.setColor(0x95a5a6);
+      otherEmbed.spliceFields(3, 1, { name: 'الحالة', value: '✅ تم القبول بواسطة إداري آخر', inline: false });
+      const disabledRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('disabled')
+          .setLabel('تم القبول من قبل آخر')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true)
+      );
+      await otherMessage.edit({ embeds: [otherEmbed], components: [disabledRow] });
+    } catch (e) { /* ignore */ }
   }
 
+  return { success: true };
+}
+
+// ✅ دالة رفض الجلسة (لن يرفضها إلا الإداري المستهدف)
+async function rejectSession(guild, citizenId, adminId, message) {
+  const session = activeSessions.get(citizenId);
+  if (!session) {
+    return { success: false, reason: 'الجلسة غير موجودة' };
+  }
+
+  if (session.status !== 'pending') {
+    return { success: false, reason: 'الجلسة لم تعد معلقة' };
+  }
+
+  if (!session.pendingAdmins.includes(adminId)) {
+    return { success: false, reason: 'الإداري ليس في قائمة المعلقين' };
+  }
+
+  // تحديث رسالة الإداري الذي رفض
   const embed = EmbedBuilder.from(message.embeds[0]);
   embed.setColor(0xe74c3c);
   embed.spliceFields(3, 1, { name: 'الحالة', value: '❌ تم الرفض بواسطة الإداري', inline: false });
@@ -389,18 +404,18 @@ async function rejectSession(guild, citizenId, adminId, message) {
 
   // إزالة هذا الإداري من قائمة المعلقين
   session.pendingAdmins = session.pendingAdmins.filter(id => id !== adminId);
+  delete session.messages[adminId];
 
-  // إذا لم يبق أي إداري في القائمة، ننهي الجلسة ونعيد المواطن للانتظار
+  // إذا أصبحت القائمة فارغة، ننهي الجلسة
   if (session.pendingAdmins.length === 0) {
     try {
       const citizenUser = await client.users.fetch(citizenId);
-      await citizenUser.send('❌ للأسف، جميع الإداريين المتاحين رفضوا طلبك. سيتم إعادة توجيهك للانتظار.');
+      await citizenUser.send('❌ جميع الإداريين المتاحين رفضوا طلبك. سيتم إعادة توجيهك للانتظار.');
     } catch (err) {}
-    // إعادة المواطن لروم الانتظار (اختياري)
     activeSessions.delete(citizenId);
   }
 
-  return true;
+  return { success: true };
 }
 
 async function endSession(guild, citizenId, adminId, startTime, message) {
@@ -455,10 +470,9 @@ async function endSession(guild, citizenId, adminId, startTime, message) {
 }
 
 // ============================================================
-// ✅ نظام السحب التلقائي (المعدل) - إرسال طلب لكل الإداريين الفاضيين
+// نظام السحب التلقائي (المعدل) - إرسال طلب لكل الإداريين الفاضيين
 // ============================================================
 async function tryPullForAllFreeAdmins(guild) {
-  // تجميع الإداريين الفاضيين
   const freeAdmins = [];
   for (const roomId of ADMIN_ROOM_IDS) {
     const channel = guild.channels.cache.get(roomId);
@@ -470,33 +484,27 @@ async function tryPullForAllFreeAdmins(guild) {
 
   if (freeAdmins.length === 0) return;
 
-  // الحصول على أول مواطن في الانتظار (غير مرتبط بجلسة)
   const candidate = getNextEligibleWaitingMember(guild);
   if (!candidate) return;
 
-  // ✅ منع السبام: إذا كان للمواطن جلسة معلقة (pending أو accepted)، لا نرسل طلب جديد
   if (activeSessions.has(candidate.id)) return;
 
-  // قفل لمنع التداخل
   if (pullLocks.has(candidate.id)) return;
   pullLocks.add(candidate.id);
 
   try {
-    // إرسال رسالة "استعد" للمواطن
     await sendCitizenNotification(candidate.user, freeAdmins[0].adminMember.user);
 
-    // حفظ الجلسة في الذاكرة مع قائمة الإداريين المعلقين
     const pendingAdmins = freeAdmins.map(fa => fa.adminMember.id);
     activeSessions.set(candidate.id, {
-      adminId: null, // سيتم تعيينه عند القبول
+      adminId: null,
       startTime: null,
       message: null,
       status: 'pending',
       pendingAdmins: pendingAdmins,
-      messages: {} // لتخزين مراجع الرسائل لكل إداري
+      messages: {}
     });
 
-    // إرسال طلب لكل إداري فاضي
     for (const { channel, adminMember } of freeAdmins) {
       const message = await sendSessionRequest(guild, candidate.user, adminMember.user);
       if (message) {
@@ -559,13 +567,11 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
   const session = activeSessions.get(userId);
 
-  // إذا كانت الجلسة نشطة (accepted) وغادر المواطن روم الإداري
   if (session && session.status === 'accepted') {
     const wasInAdminRoom = oldState.channelId && ADMIN_ROOM_IDS.includes(oldState.channelId);
     const isInAdminRoom = newState.channelId && ADMIN_ROOM_IDS.includes(newState.channelId);
     
     if (wasInAdminRoom && !isInAdminRoom) {
-      // ننهي الجلسة
       const adminId = session.adminId;
       const message = session.messages ? session.messages[adminId] : null;
       if (message) {
@@ -575,17 +581,14 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  // إذا دخل مواطن إلى روم الانتظار، نحاول إرسال طلبات للإداريين الفاضيين
   const enteredWaiting = WAITING_CHANNEL_IDS.includes(newState.channelId) && !WAITING_CHANNEL_IDS.includes(oldState.channelId);
   if (enteredWaiting) {
-    // نتحقق من أن العضو ليس إداري
     const member = await guild.members.fetch(userId).catch(() => null);
     if (member && !hasStaffRole(member)) {
       await tryPullForAllFreeAdmins(guild);
     }
   }
 
-  // محاولة السحب التلقائي عند أي تغيير (لكن مع منع التكرار)
   try {
     await tryPullForAllFreeAdmins(guild);
   } catch (err) {
@@ -605,25 +608,30 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const citizenId = parts[2];
         const adminId = parts[3];
 
-        const session = activeSessions.get(citizenId);
-        if (!session || session.status !== 'pending') {
-          return interaction.reply({ content: '⚠️ هذه الجلسة غير متاحة أو انتهت.', ephemeral: true });
+        // ✅ التحقق الصارم: فقط الإداري المستهدف يمكنه الضغط على هذا الزر
+        if (interaction.user.id !== adminId) {
+          return interaction.reply({
+            content: '❌ هذا الزر مخصص لإداري آخر، لا يمكنك قبول هذه الجلسة.',
+            ephemeral: true
+          });
         }
 
-        // تأكد أن الإداري لا يزال في القائمة
+        const session = activeSessions.get(citizenId);
+        if (!session) {
+          return interaction.reply({ content: '⚠️ هذه الجلسة غير موجودة.', ephemeral: true });
+        }
+        if (session.status !== 'pending') {
+          return interaction.reply({ content: '⚠️ هذه الجلسة لم تعد معلقة.', ephemeral: true });
+        }
         if (!session.pendingAdmins.includes(adminId)) {
           return interaction.reply({ content: '⚠️ هذا الطلب لم يعد متاحاً.', ephemeral: true });
         }
 
-        // قبول الجلسة
         const message = session.messages ? session.messages[adminId] : interaction.message;
-        const success = await acceptSession(interaction.guild, citizenId, adminId, message);
-        if (!success) {
-          return interaction.reply({ content: '⚠️ حدث خطأ أثناء القبول.', ephemeral: true });
+        const result = await acceptSession(interaction.guild, citizenId, adminId, message);
+        if (!result.success) {
+          return interaction.reply({ content: `⚠️ ${result.reason}`, ephemeral: true });
         }
-
-        // تعيين adminId في الجلسة
-        session.adminId = adminId;
 
         // سحب المواطن إلى روم الإداري
         try {
@@ -639,24 +647,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           console.error('⚠️ فشل سحب المواطن بعد القبول:', err);
         }
 
-        // ✅ تحديث رسائل الإداريين الآخرين بأن الجلسة قُبلت
-        for (const [otherAdminId, otherMessage] of Object.entries(session.messages || {})) {
-          if (otherAdminId === adminId) continue;
-          try {
-            const otherEmbed = EmbedBuilder.from(otherMessage.embeds[0]);
-            otherEmbed.setColor(0x95a5a6);
-            otherEmbed.spliceFields(3, 1, { name: 'الحالة', value: '✅ تم القبول بواسطة إداري آخر', inline: false });
-            const disabledRow = new ActionRowBuilder().addComponents(
-              new ButtonBuilder()
-                .setCustomId('disabled')
-                .setLabel('تم القبول من قبل آخر')
-                .setStyle(ButtonStyle.Secondary)
-                .setDisabled(true)
-            );
-            await otherMessage.edit({ embeds: [otherEmbed], components: [disabledRow] });
-          } catch (e) { /* ignore */ }
-        }
-
         return interaction.reply({ content: '✅ تم القبول وتم سحب المواطن.', ephemeral: true });
       }
 
@@ -665,29 +655,29 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const citizenId = parts[2];
         const adminId = parts[3];
 
-        const session = activeSessions.get(citizenId);
-        if (!session || session.status !== 'pending') {
-          return interaction.reply({ content: '⚠️ هذه الجلسة غير متاحة.', ephemeral: true });
+        // ✅ التحقق الصارم: فقط الإداري المستهدف يمكنه الضغط على هذا الزر
+        if (interaction.user.id !== adminId) {
+          return interaction.reply({
+            content: '❌ هذا الزر مخصص لإداري آخر، لا يمكنك رفض هذه الجلسة.',
+            ephemeral: true
+          });
         }
 
+        const session = activeSessions.get(citizenId);
+        if (!session) {
+          return interaction.reply({ content: '⚠️ هذه الجلسة غير موجودة.', ephemeral: true });
+        }
+        if (session.status !== 'pending') {
+          return interaction.reply({ content: '⚠️ هذه الجلسة لم تعد معلقة.', ephemeral: true });
+        }
         if (!session.pendingAdmins.includes(adminId)) {
           return interaction.reply({ content: '⚠️ هذا الطلب لم يعد متاحاً.', ephemeral: true });
         }
 
         const message = session.messages ? session.messages[adminId] : interaction.message;
-        await rejectSession(interaction.guild, citizenId, adminId, message);
-        // حذف الإداري من القائمة المعلقة
-        session.pendingAdmins = session.pendingAdmins.filter(id => id !== adminId);
-        // حذف مرجع الرسالة
-        if (session.messages) delete session.messages[adminId];
-
-        // إذا لم يبق إداري، ننهي الجلسة
-        if (session.pendingAdmins.length === 0) {
-          try {
-            const citizenUser = await client.users.fetch(citizenId);
-            await citizenUser.send('❌ جميع الإداريين المتاحين رفضوا طلبك. سيتم إعادة توجيهك للانتظار.');
-          } catch (err) {}
-          activeSessions.delete(citizenId);
+        const result = await rejectSession(interaction.guild, citizenId, adminId, message);
+        if (!result.success) {
+          return interaction.reply({ content: `⚠️ ${result.reason}`, ephemeral: true });
         }
 
         return interaction.reply({ content: '❌ تم رفض الجلسة.', ephemeral: true });
