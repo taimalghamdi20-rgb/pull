@@ -70,6 +70,9 @@ const RESIGNATION_KEEP_ROLE_ID = '1476796533168017428';
 const STAFF_ROLE_IDS = ['1459304407899443396', '1459304410923532481'];
 const DONE_TEXT_CHANNEL_ID = '1529933848144510976';
 
+// ✅ روم الـ Done الصوتي لنقل المواطن إليه عند إنهاء الجلسة
+const DONE_VOICE_CHANNEL_ID_FOR_MOVE = '1499086608010449089';
+
 const ADMIN_ROOM_IDS = [
   '1499105265272754246',
   '1499105221383819497',
@@ -294,7 +297,6 @@ async function sendSessionRequest(guild, citizen, admin) {
   return message;
 }
 
-// ✅ دالة قبول الجلسة (لن يقبلها إلا الإداري المستهدف)
 async function acceptSession(guild, citizenId, adminId, message) {
   const session = activeSessions.get(citizenId);
   if (!session) {
@@ -305,17 +307,14 @@ async function acceptSession(guild, citizenId, adminId, message) {
     return { success: false, reason: 'الجلسة لم تعد معلقة' };
   }
 
-  // التأكد من أن الإداري لا يزال في قائمة المعلقين
   if (!session.pendingAdmins.includes(adminId)) {
     return { success: false, reason: 'الإداري ليس في قائمة المعلقين' };
   }
 
-  // تحديث حالة الجلسة
   session.status = 'accepted';
   session.startTime = Date.now();
   session.adminId = adminId;
 
-  // تحديث رسالة الإداري الذي قبل
   const embed = EmbedBuilder.from(message.embeds[0]);
   embed.setColor(0x2ecc71);
   embed.spliceFields(3, 1, { name: 'الحالة', value: '✅ تم القبول - جلسة نشطة', inline: false });
@@ -330,7 +329,6 @@ async function acceptSession(guild, citizenId, adminId, message) {
 
   await message.edit({ embeds: [embed], components: [row] });
 
-  // إرسال رسالة للمواطن بالقبول
   try {
     const citizenUser = await client.users.fetch(citizenId);
     const embedNotify = new EmbedBuilder()
@@ -350,7 +348,6 @@ async function acceptSession(guild, citizenId, adminId, message) {
     console.error('❌ تعذر إرسال رسالة القبول للمواطن:', err);
   }
 
-  // تعطيل أزرار الإداريين الآخرين
   for (const [otherAdminId, otherMessage] of Object.entries(session.messages || {})) {
     if (otherAdminId === adminId) continue;
     try {
@@ -371,7 +368,6 @@ async function acceptSession(guild, citizenId, adminId, message) {
   return { success: true };
 }
 
-// ✅ دالة رفض الجلسة (لن يرفضها إلا الإداري المستهدف)
 async function rejectSession(guild, citizenId, adminId, message) {
   const session = activeSessions.get(citizenId);
   if (!session) {
@@ -386,7 +382,6 @@ async function rejectSession(guild, citizenId, adminId, message) {
     return { success: false, reason: 'الإداري ليس في قائمة المعلقين' };
   }
 
-  // تحديث رسالة الإداري الذي رفض
   const embed = EmbedBuilder.from(message.embeds[0]);
   embed.setColor(0xe74c3c);
   embed.spliceFields(3, 1, { name: 'الحالة', value: '❌ تم الرفض بواسطة الإداري', inline: false });
@@ -402,11 +397,9 @@ async function rejectSession(guild, citizenId, adminId, message) {
 
   await message.edit({ embeds: [embed], components: [disabledRow] });
 
-  // إزالة هذا الإداري من قائمة المعلقين
   session.pendingAdmins = session.pendingAdmins.filter(id => id !== adminId);
   delete session.messages[adminId];
 
-  // إذا أصبحت القائمة فارغة، ننهي الجلسة
   if (session.pendingAdmins.length === 0) {
     try {
       const citizenUser = await client.users.fetch(citizenId);
@@ -418,6 +411,9 @@ async function rejectSession(guild, citizenId, adminId, message) {
   return { success: true };
 }
 
+// ============================================================
+// ✅ دالة إنهاء الجلسة (مع نقل المواطن إلى روم الـ Done الصوتي)
+// ============================================================
 async function endSession(guild, citizenId, adminId, startTime, message) {
   const durationSec = Math.floor((Date.now() - startTime) / 1000);
   const minutes = Math.floor(durationSec / 60);
@@ -446,6 +442,20 @@ async function endSession(guild, citizenId, adminId, startTime, message) {
   );
 
   await message.edit({ embeds: [embed], components: [disabledRow] });
+
+  // ✅ نقل المواطن إلى روم الـ Done الصوتي
+  try {
+    const citizenMember = await guild.members.fetch(citizenId);
+    const doneVoiceChannel = guild.channels.cache.get(DONE_VOICE_CHANNEL_ID_FOR_MOVE);
+    if (doneVoiceChannel && citizenMember.voice.channel) {
+      await citizenMember.voice.setChannel(doneVoiceChannel.id, 'إنهاء الجلسة - نقل إلى روم الـ Done');
+      console.log(`✅ تم نقل ${citizenMember.user.tag} إلى روم الـ Done الصوتي`);
+    } else if (!doneVoiceChannel) {
+      console.warn(`⚠️ روم الـ Done الصوتي (${DONE_VOICE_CHANNEL_ID_FOR_MOVE}) غير موجود`);
+    }
+  } catch (err) {
+    console.error('⚠️ فشل نقل المواطن إلى روم الـ Done:', err);
+  }
 
   try {
     const citizenUser = await client.users.fetch(citizenId);
@@ -608,7 +618,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const citizenId = parts[2];
         const adminId = parts[3];
 
-        // ✅ التحقق الصارم: فقط الإداري المستهدف يمكنه الضغط على هذا الزر
         if (interaction.user.id !== adminId) {
           return interaction.reply({
             content: '❌ هذا الزر مخصص لإداري آخر، لا يمكنك قبول هذه الجلسة.',
@@ -633,7 +642,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.reply({ content: `⚠️ ${result.reason}`, ephemeral: true });
         }
 
-        // سحب المواطن إلى روم الإداري
         try {
           const citizenMember = await interaction.guild.members.fetch(citizenId);
           const adminMember = await interaction.guild.members.fetch(adminId);
@@ -655,7 +663,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const citizenId = parts[2];
         const adminId = parts[3];
 
-        // ✅ التحقق الصارم: فقط الإداري المستهدف يمكنه الضغط على هذا الزر
         if (interaction.user.id !== adminId) {
           return interaction.reply({
             content: '❌ هذا الزر مخصص لإداري آخر، لا يمكنك رفض هذه الجلسة.',
