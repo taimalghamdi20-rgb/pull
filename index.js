@@ -20,6 +20,7 @@ const {
 const Database = require('better-sqlite3');
 const db = new Database('data.db');
 
+// إنشاء الجداول (مع إضافة جدول evaluated_logs)
 db.exec(`
   CREATE TABLE IF NOT EXISTS done_counts (
     admin_id TEXT PRIMARY KEY,
@@ -28,6 +29,9 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS active_leaves (
     user_id TEXT PRIMARY KEY,
     end_date INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS evaluated_logs (
+    log_id TEXT PRIMARY KEY
   );
 `);
 
@@ -86,7 +90,7 @@ function hasStaffRole(member) {
   return STAFF_ROLE_IDS.some((roleId) => member.roles.cache.has(roleId));
 }
 
-// ===== نظام حفظ إحصائيات الـ Done (باستخدام SQLite) =====
+// ===== دوال قاعدة البيانات =====
 function loadDoneCounts() {
   const stmt = db.prepare('SELECT admin_id, count FROM done_counts');
   const rows = stmt.all();
@@ -104,11 +108,39 @@ function saveDoneCounts() {
   trans(doneCounts.entries());
 }
 
+function loadActiveLeaves() {
+  const stmt = db.prepare('SELECT user_id, end_date FROM active_leaves');
+  const rows = stmt.all();
+  const map = new Map();
+  for (const row of rows) map.set(row.user_id, { endDate: row.end_date });
+  return map;
+}
+
+function saveActiveLeaves() {
+  db.prepare('DELETE FROM active_leaves').run();
+  const insert = db.prepare('INSERT INTO active_leaves (user_id, end_date) VALUES (?, ?)');
+  const trans = db.transaction((entries) => {
+    for (const [userId, data] of entries) insert.run(userId, data.endDate);
+  });
+  trans(activeLeaves.entries());
+}
+
+// ✅ دوال التقييم المكرر
+function isLogEvaluated(logId) {
+  const stmt = db.prepare('SELECT log_id FROM evaluated_logs WHERE log_id = ?');
+  return stmt.get(logId) !== undefined;
+}
+
+function markLogEvaluated(logId) {
+  const stmt = db.prepare('INSERT OR IGNORE INTO evaluated_logs (log_id) VALUES (?)');
+  stmt.run(logId);
+}
+
+// تحميل البيانات
 const doneCounts = loadDoneCounts();
+const activeLeaves = loadActiveLeaves();
 
-// ===== نظام منع التقييم المتكرر =====
-const evaluatedLogs = new Set();
-
+// ===== دوال مساعدة =====
 function ratingStarsBar(rating) {
   const filled = '⭐'.repeat(rating);
   const empty = '☆'.repeat(5 - rating);
@@ -132,26 +164,6 @@ const LEAVE_BANNER_PATH = path.join(__dirname, 'leave_banner.png');
 const LEAVE_BANNER_FILENAME = 'leave_banner.png';
 const SERVER_LOGO_PATH = path.join(__dirname, 'server_logo.png');
 const SERVER_LOGO_FILENAME = 'server_logo.png';
-
-// ===== نظام حفظ الإجازات النشطة (باستخدام SQLite) =====
-function loadActiveLeaves() {
-  const stmt = db.prepare('SELECT user_id, end_date FROM active_leaves');
-  const rows = stmt.all();
-  const map = new Map();
-  for (const row of rows) map.set(row.user_id, { endDate: row.end_date });
-  return map;
-}
-
-function saveActiveLeaves() {
-  db.prepare('DELETE FROM active_leaves').run();
-  const insert = db.prepare('INSERT INTO active_leaves (user_id, end_date) VALUES (?, ?)');
-  const trans = db.transaction((entries) => {
-    for (const [userId, data] of entries) insert.run(userId, data.endDate);
-  });
-  trans(activeLeaves.entries());
-}
-
-const activeLeaves = loadActiveLeaves();
 
 const client = new Client({
   intents: [
@@ -186,16 +198,6 @@ client.on(Events.MessageCreate, async (message) => {
 // ============================================================
 // دوال مساعدة لنظام السحب (تم تعديلها)
 // ============================================================
-function isMutedOrDeafened(voiceState) {
-  if (!voiceState) return false;
-  return (
-    voiceState.selfMute ||
-    voiceState.selfDeaf ||
-    voiceState.serverMute ||
-    voiceState.serverDeaf
-  );
-}
-
 function isDeafened(voiceState) {
   if (!voiceState) return false;
   return voiceState.selfDeaf || voiceState.serverDeaf;
@@ -208,7 +210,6 @@ function getNextEligibleWaitingMember(guild) {
     if (!waitingChannel || !waitingChannel.members) continue;
 
     for (const [, member] of waitingChannel.members) {
-      // لا نتحقق من حالة الميوت أو الديفن – نسحب أي مواطن
       return member;
     }
   }
@@ -225,7 +226,6 @@ function isFreeAdminRoom(channel) {
 
   const adminMember = members[0];
   if (!adminMember.roles.cache.has(ADMIN_ROLE_ID)) return false;
-  // نرفض الإداري فقط إذا كان مدفناً
   if (isDeafened(adminMember.voice)) return false;
 
   return true;
@@ -321,11 +321,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     activeSessions.delete(citizenId);
 
     const durationSec = Math.floor((Date.now() - startTime) / 1000);
-
-    // ✅ تم إزالة شرط المدة، يُسجل الـ Done فوراً (أو نتركه حسب الطلب)
-    // لكن حسب الصورة التي أرسلتها، الـ Done يسجل حتى للخدمات القصيرة، لذا سأزيل الشرط
-    // إذا أردت إبقاء شرط 5 ثوانٍ، يمكنك إعادة إضافته
-    // سأتركه بدون شرط كما طلبت سابقاً (تسجيل فوري)
     const minutes = Math.floor(durationSec / 60);
     const seconds = durationSec % 60;
     const durationText = minutes > 0 ? `${minutes} دقيقة و ${seconds} ثانية` : `${seconds} ثانية`;
@@ -407,7 +402,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // --------------------------------------------------------
     if (interaction.isButton()) {
 
-      // ✅ إضافة التحقق من وجود customId قبل استخدام startsWith
+      // ✅ أزرار التقييم مع منع التقييم المتكرر باستخدام قاعدة البيانات
       if (interaction.customId && interaction.customId.startsWith('rate_')) {
         const parts = interaction.customId.split('_');
         const rating = parseInt(parts[1]);
@@ -415,14 +410,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const logMsgId = parts[3];
         const stars = ratingStarsBar(rating);
 
-        if (evaluatedLogs.has(logMsgId)) {
+        // ✅ التحقق من التقييم في قاعدة البيانات
+        if (isLogEvaluated(logMsgId)) {
           return interaction.reply({
             content: '⚠️ تم تقييم هذه الخدمة مسبقاً، شكراً لك!',
             ephemeral: true
           });
         }
 
-        evaluatedLogs.add(logMsgId);
+        // ✅ تسجيل التقييم في قاعدة البيانات
+        markLogEvaluated(logMsgId);
 
         await interaction.update({ content: `✅ شكراً لتقييمك! (أعطيت ${stars})`, embeds: [], components: [] });
 
@@ -476,7 +473,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      // 1. زر فتح نموذج طلب الإجازة
+      // باقي الأزرار (طلبات الإجازات والاستقالات)
       if (interaction.customId === 'open_leave_modal') {
         const modal = new ModalBuilder()
           .setCustomId('leave_modal')
@@ -507,7 +504,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      // 2. زر فتح نموذج طلب الاستقالة
       if (interaction.customId === 'open_resign_modal') {
         const modal = new ModalBuilder()
           .setCustomId('resign_modal')
@@ -527,7 +523,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      // 2.5 زر فتح نموذج طلب كسر الإجازة
       if (interaction.customId === 'open_break_modal') {
         const modal = new ModalBuilder()
           .setCustomId('break_modal')
@@ -547,7 +542,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      // 3. أزرار قبول/رفض طلب إجازة أو استقالة
       if (interaction.customId && (interaction.customId.startsWith('req_accept_') || interaction.customId.startsWith('req_reject_'))) {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({
@@ -880,7 +874,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [embed] });
       }
 
-      // أمر التوب 10
       if (interaction.commandName === 'top_done') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة فقط.', ephemeral: true });
@@ -905,7 +898,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [embed] });
       }
 
-      // أمر عرض الكل
       if (interaction.commandName === 'all_dones') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة فقط.', ephemeral: true });
@@ -926,7 +918,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [embed] });
       }
 
-      // إضافة إنجازات
       if (interaction.commandName === 'add_done') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة العليا فقط.', ephemeral: true });
@@ -943,7 +934,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: `✅ تم إضافة \`${amount}\` إلى إحصائيات <@${admin.id}>. المجموع الحالي: \`${newCount}\``, ephemeral: true });
       }
 
-      // خصم إنجازات
       if (interaction.commandName === 'remove_done') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة العليا فقط.', ephemeral: true });
@@ -960,7 +950,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: `✅ تم خصم \`${amount}\` من إحصائيات <@${admin.id}>. المجموع الحالي: \`${newCount}\``, ephemeral: true });
       }
 
-      // تصفير الإحصائيات
       if (interaction.commandName === 'reset_all') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بأصحاب صلاحية الإدارة العليا فقط.', ephemeral: true });
@@ -978,6 +967,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.reply({ content: '❌ حدث خطأ أثناء معالجة الطلب.', ephemeral: true }).catch(() => null);
     }
   }
+});
+
+// ============================================================
+// حفظ البيانات عند إيقاف البوت (graceful shutdown)
+// ============================================================
+process.on('SIGINT', () => {
+  console.log('🔄 جاري حفظ البيانات قبل الإغلاق...');
+  saveDoneCounts();
+  saveActiveLeaves();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log('🔄 جاري حفظ البيانات قبل الإغلاق...');
+  saveDoneCounts();
+  saveActiveLeaves();
+  process.exit(0);
 });
 
 client.login(BOT_TOKEN);
