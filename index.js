@@ -520,9 +520,10 @@ async function endSession(guild, citizenId, adminId, startTime, message) {
 }
 
 // ============================================================
-// نظام السحب التلقائي
+// نظام السحب التلقائي (معدل لمنع السبام وإضافة الإداريين الجدد فقط)
 // ============================================================
 async function tryPullForAllFreeAdmins(guild) {
+  // الحصول على الإداريين المتوفرين حالياً
   const freeAdmins = [];
   for (const roomId of ADMIN_ROOM_IDS) {
     const channel = guild.channels.cache.get(roomId);
@@ -534,31 +535,68 @@ async function tryPullForAllFreeAdmins(guild) {
 
   if (freeAdmins.length === 0) return;
 
+  // البحث عن مواطن ينتظر في غرف الانتظار
   const candidate = getNextEligibleWaitingMember(guild);
   if (!candidate) return;
 
-  if (activeSessions.has(candidate.id)) return;
-
+  // منع التنفيذ المتزامن لنفس المواطن
   if (pullLocks.has(candidate.id)) return;
   pullLocks.add(candidate.id);
 
   try {
+    // التحقق من وجود جلسة معلقة لهذا المواطن
+    let session = activeSessions.get(candidate.id);
+
+    if (session) {
+      // إذا كانت الجلسة في حالة pending فقط نتعامل معها
+      if (session.status === 'pending') {
+        // قائمة الإداريين الحاليين في الجلسة
+        const currentAdmins = session.pendingAdmins || [];
+
+        // تصفية الإداريين المتوفرين الذين ليسوا في القائمة الحالية
+        const newAdmins = freeAdmins.filter(fa => !currentAdmins.includes(fa.adminMember.id));
+
+        if (newAdmins.length === 0) {
+          // لا يوجد إداريين جدد، نخرج
+          return;
+        }
+
+        // إضافة الإداريين الجدد إلى قائمة المعلقين
+        for (const { adminMember } of newAdmins) {
+          session.pendingAdmins.push(adminMember.id);
+          // إرسال طلب جديد لكل إداري جديد
+          const message = await sendSessionRequest(guild, candidate.user, adminMember.user);
+          if (message) {
+            session.messages[adminMember.id] = message;
+          }
+        }
+
+        console.log(`📨 تم إرسال طلبات دعم جديدة لـ ${candidate.user.tag} إلى ${newAdmins.length} إداري إضافي`);
+        return;
+      } else {
+        // إذا كانت الجلسة في حالة أخرى (مقبولة أو منتهية) فلا نتدخل
+        return;
+      }
+    }
+
+    // لا توجد جلسة، ننشئ جلسة جديدة ونرسل طلبات لكل الإداريين المتوفرين
     await sendCitizenNotification(candidate.user, freeAdmins[0].adminMember.user);
 
     const pendingAdmins = freeAdmins.map(fa => fa.adminMember.id);
-    activeSessions.set(candidate.id, {
+    session = {
       adminId: null,
       startTime: null,
       message: null,
       status: 'pending',
       pendingAdmins: pendingAdmins,
       messages: {}
-    });
+    };
+    activeSessions.set(candidate.id, session);
 
     for (const { channel, adminMember } of freeAdmins) {
       const message = await sendSessionRequest(guild, candidate.user, adminMember.user);
       if (message) {
-        activeSessions.get(candidate.id).messages[adminMember.id] = message;
+        session.messages[adminMember.id] = message;
       }
     }
 
@@ -668,7 +706,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  // ===== المنطق الأصلي للسحب التلقائي =====
+  // ===== المنطق الأصلي للسحب التلقائي (يستدعي الدالة المعدلة) =====
   const enteredWaitingOriginal = WAITING_CHANNEL_IDS.includes(newState.channelId) && !WAITING_CHANNEL_IDS.includes(oldState.channelId);
   if (enteredWaitingOriginal) {
     const member = await guild.members.fetch(userId).catch(() => null);
@@ -677,6 +715,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
+  // استدعاء السحب التلقائي في كل تغيير (لإضافة الإداريين الجدد)
   try {
     await tryPullForAllFreeAdmins(guild);
   } catch (err) {
