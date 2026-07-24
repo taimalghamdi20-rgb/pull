@@ -70,7 +70,7 @@ const RESIGNATION_KEEP_ROLE_ID = '1476796533168017428';
 const STAFF_ROLE_IDS = ['1459304407899443396', '1459304410923532481'];
 const DONE_TEXT_CHANNEL_ID = '1529933848144510976';
 
-// ✅ روم الـ Done الصوتي لنقل المواطن إليه عند إنهاء الجلسة
+// روم الـ Done الصوتي لنقل المواطن إليه عند إنهاء الجلسة
 const DONE_VOICE_CHANNEL_ID_FOR_MOVE = '1499086608010449089';
 
 const ADMIN_ROOM_IDS = [
@@ -412,7 +412,7 @@ async function rejectSession(guild, citizenId, adminId, message) {
 }
 
 // ============================================================
-// ✅ دالة إنهاء الجلسة (مع نقل المواطن إلى روم الـ Done الصوتي)
+// ✅ دالة إنهاء الجلسة (مع تعديل الحقول لمنع التكرار)
 // ============================================================
 async function endSession(guild, citizenId, adminId, startTime, message) {
   const durationSec = Math.floor((Date.now() - startTime) / 1000);
@@ -425,12 +425,21 @@ async function endSession(guild, citizenId, adminId, startTime, message) {
   saveDoneCounts();
 
   const embed = EmbedBuilder.from(message.embeds[0]);
-  embed.setColor(0x57f287);
-  embed.spliceFields(3, 1, { name: 'الحالة', value: '✅ تم الانتهاء', inline: false });
-  embed.addFields(
+
+  // أخذ الحقول الثلاثة الأولى (اللاعب، الإداري، الوقت)
+  const currentFields = embed.data.fields || [];
+  const baseFields = currentFields.slice(0, 3);
+
+  // بناء الحقول الجديدة
+  const newFields = [
+    ...baseFields,
+    { name: 'الحالة', value: '✅ تم الانتهاء', inline: false },
     { name: '⏱️ مدة الخدمة', value: `\`${durationText}\``, inline: true },
     { name: '📊 مجموع الـ Done', value: `\`${currentCount}\``, inline: true }
-  );
+  ];
+
+  embed.setFields(newFields);
+  embed.setColor(0x57f287);
   embed.setFooter({ text: 'تم إنهاء الجلسة', iconURL: 'attachment://server_logo.png' });
 
   const disabledRow = new ActionRowBuilder().addComponents(
@@ -443,7 +452,7 @@ async function endSession(guild, citizenId, adminId, startTime, message) {
 
   await message.edit({ embeds: [embed], components: [disabledRow] });
 
-  // ✅ نقل المواطن إلى روم الـ Done الصوتي
+  // نقل المواطن إلى روم الـ Done الصوتي
   try {
     const citizenMember = await guild.members.fetch(citizenId);
     const doneVoiceChannel = guild.channels.cache.get(DONE_VOICE_CHANNEL_ID_FOR_MOVE);
