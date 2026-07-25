@@ -214,11 +214,14 @@ async function tryPullForAllFreeAdmins(guild) {
   // التحقق من عدم وجود جلسة نشطة لهذا المواطن
   if (activeSessions.has(candidate.id)) return;
 
-  // تصفية الإداريين حسب الكول داون
+  // تصفية الإداريين حسب الكول داون (كل إداري مع هذا المواطن)
   const eligibleAdmins = freeAdmins.filter(({ adminMember }) => {
     const key = `${adminMember.id}_${candidate.id}`;
     const cooldownEnd = cooldownMap.get(key);
-    if (cooldownEnd && cooldownEnd > Date.now()) return false;
+    if (cooldownEnd && cooldownEnd > Date.now()) {
+      // هذا الإداري لديه كول داون مع هذا المواطن، نستبعده
+      return false;
+    }
     return true;
   });
 
@@ -227,7 +230,7 @@ async function tryPullForAllFreeAdmins(guild) {
     return;
   }
 
-  // اختيار أول إداري
+  // اختيار أول إداري متاح (غير موجود في الكول داون)
   const { adminMember } = eligibleAdmins[0];
   const adminChannel = adminMember.voice.channel;
 
@@ -261,7 +264,7 @@ async function endSession(guild, citizenId, adminId, startTime) {
   const seconds = durationSec % 60;
   const durationText = minutes > 0 ? `${minutes} دقيقة و ${seconds} ثانية` : `${seconds} ثانية`;
 
-  // تطبيق كول داون لمنع السحب لنفس الإداري خلال دقيقة
+  // تطبيق كول داون لهذا المواطن مع هذا الإداري لمدة دقيقة
   const cooldownKey = `${adminId}_${citizenId}`;
   cooldownMap.set(cooldownKey, Date.now() + 60 * 1000);
 
