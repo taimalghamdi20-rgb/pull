@@ -20,6 +20,7 @@ const {
 const Database = require('better-sqlite3');
 const db = new Database('data.db');
 
+// ===== إنشاء الجداول =====
 db.exec(`
   CREATE TABLE IF NOT EXISTS done_counts (
     admin_id TEXT PRIMARY KEY,
@@ -31,6 +32,12 @@ db.exec(`
   );
   CREATE TABLE IF NOT EXISTS evaluated_logs (
     log_id TEXT PRIMARY KEY
+  );
+  CREATE TABLE IF NOT EXISTS done_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    admin_id TEXT NOT NULL,
+    timestamp INTEGER NOT NULL,
+    duration_seconds INTEGER
   );
 `);
 
@@ -50,7 +57,10 @@ if (!BOT_TOKEN || !GUILD_ID || !WAITING_CHANNEL_ID || !ADMIN_ROLE_ID) {
   process.exit(1);
 }
 
-// ===== إضافة رومات الانتظار الجديدة =====
+// ===== إعدادات الحماية =====
+const MIN_SESSION_DURATION_SECONDS = 20;
+
+// ===== إضافة رومات الانتظار =====
 const ADDITIONAL_WAITING_IDS = [
   '1481398869463138604',
   '1519511668823167116'
@@ -69,14 +79,11 @@ const LEAVE_ROLE_ID = '1459304469127758027';
 const RESIGNATION_KEEP_ROLE_ID = '1476796533168017428';
 const STAFF_ROLE_IDS = ['1459304407899443396', '1459304410923532481'];
 const DONE_TEXT_CHANNEL_ID = '1529933848144510976';
-
-// روم الـ Done الصوتي لنقل المواطن إليه عند إنهاء الجلسة
 const DONE_VOICE_CHANNEL_ID_FOR_MOVE = '1499086608010449089';
 
-// ===== إعدادات الإشعار عند بقاء المواطن 3 دقائق =====
 const WAITING_NOTIFICATION_CHANNEL_ID = '1530276832203636737';
 const WAITING_MENTION_ROLE_ID = '1499102575918579793';
-const WAITING_TIMEOUT_MS = 3 * 60 * 1000; // 3 دقائق
+const WAITING_TIMEOUT_MS = 3 * 60 * 1000;
 
 const ADMIN_ROOM_IDS = [
   '1499105265272754246',
@@ -93,9 +100,8 @@ const ADMIN_ROOM_IDS = [
   '1519516058682130632',
 ];
 
-// الرتب المسموح لها بقبول الجلسات
-const ALLOWED_ACCEPT_ROLE_ID = '1459304407899443396'; // قبول أي جلسة لإداري آخر
-const SELF_ACCEPT_ROLE_ID = '1499102575918579793';   // قبول الجلسة الخاصة فقط
+const ALLOWED_ACCEPT_ROLE_ID = '1459304407899443396';
+const SELF_ACCEPT_ROLE_ID = '1499102575918579793';
 
 function hasStaffRole(member) {
   return STAFF_ROLE_IDS.some((roleId) => member.roles.cache.has(roleId));
@@ -136,7 +142,6 @@ function saveActiveLeaves() {
   trans(activeLeaves.entries());
 }
 
-// دوال التقييم المكرر
 function isLogEvaluated(logId) {
   const stmt = db.prepare('SELECT log_id FROM evaluated_logs WHERE log_id = ?');
   return stmt.get(logId) !== undefined;
@@ -147,7 +152,12 @@ function markLogEvaluated(logId) {
   stmt.run(logId);
 }
 
-// تحميل البيانات
+function addDoneHistory(adminId, durationSeconds) {
+  const stmt = db.prepare('INSERT INTO done_history (admin_id, timestamp, duration_seconds) VALUES (?, ?, ?)');
+  stmt.run(adminId, Date.now(), durationSeconds);
+}
+
+// ===== تحميل البيانات =====
 const doneCounts = loadDoneCounts();
 const activeLeaves = loadActiveLeaves();
 
@@ -187,8 +197,8 @@ const client = new Client({
 });
 
 const pullLocks = new Set();
-const activeSessions = new Map(); // citizenId -> { adminId, startTime, message, status, pendingAdmins, messages }
-const waitingTimers = new Map(); // userId -> { timeout, channelId, sent }
+const activeSessions = new Map();
+const waitingTimers = new Map();
 
 // ============================================================
 // حماية روم الإجازات
@@ -234,7 +244,7 @@ function isFreeAdminRoom(channel) {
 }
 
 // ============================================================
-// دوال الجلسة (القبول، الرفض، الإنهاء، الإشعارات)
+// دوال الجلسة
 // ============================================================
 async function sendCitizenNotification(citizenUser, adminUser) {
   try {
@@ -317,7 +327,6 @@ async function acceptSession(guild, citizenId, adminId, message) {
     return { success: false, reason: 'الجلسة لم تعد معلقة' };
   }
 
-  // إذا كان الإداري غير موجود في القائمة، نضيفه (للسماح بالقبول من قبل إداري آخر)
   if (!session.pendingAdmins.includes(adminId)) {
     session.pendingAdmins.push(adminId);
   }
@@ -371,7 +380,6 @@ async function acceptSession(guild, citizenId, adminId, message) {
     console.error('❌ تعذر إرسال رسالة القبول للمواطن:', err);
   }
 
-  // تعطيل أزرار الإداريين الآخرين
   for (const [otherAdminId, otherMessage] of Object.entries(session.messages || {})) {
     if (otherAdminId === adminId) continue;
     try {
@@ -446,7 +454,7 @@ async function rejectSession(guild, citizenId, adminId, message) {
 }
 
 // ============================================================
-// ✅ دالة إنهاء الجلسة
+// دالة إنهاء الجلسة (مع المدة الدنيا 20 ثانية)
 // ============================================================
 async function endSession(guild, citizenId, adminId, startTime, message) {
   const durationSec = Math.floor((Date.now() - startTime) / 1000);
@@ -454,12 +462,66 @@ async function endSession(guild, citizenId, adminId, startTime, message) {
   const seconds = durationSec % 60;
   const durationText = minutes > 0 ? `${minutes} دقيقة و ${seconds} ثانية` : `${seconds} ثانية`;
 
+  if (durationSec < MIN_SESSION_DURATION_SECONDS) {
+    console.warn(`⚠️ جلسة قصيرة جداً (${durationSec} ثانية) من <@${adminId}>، لم يتم احتساب Done.`);
+
+    const embed = EmbedBuilder.from(message.embeds[0]);
+    const currentFields = embed.data.fields || [];
+    const baseFields = currentFields.slice(0, 3);
+    const newFields = [
+      ...baseFields,
+      { name: 'الحالة', value: '❌ تم الإنهاء (مدة قصيرة جداً)', inline: false },
+      { name: '⏱️ المدة', value: `\`${durationText}\``, inline: true },
+      { name: '📊 ملاحظة', value: `لم يتم احتساب Done لأن المدة أقل من ${MIN_SESSION_DURATION_SECONDS} ثانية`, inline: false }
+    ];
+    embed.setFields(newFields);
+    embed.setColor(0xe74c3c);
+    embed.setFooter({ text: 'لم يتم احتساب Done', iconURL: 'attachment://server_logo.png' });
+
+    const disabledRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('disabled')
+        .setLabel('تم الإنتهاء (مدة قصيرة)')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(true)
+    );
+    await message.edit({ embeds: [embed], components: [disabledRow] });
+
+    try {
+      const citizenMember = await guild.members.fetch(citizenId);
+      const doneVoiceChannel = guild.channels.cache.get(DONE_VOICE_CHANNEL_ID_FOR_MOVE);
+      if (doneVoiceChannel && citizenMember.voice.channel) {
+        await citizenMember.voice.setChannel(doneVoiceChannel.id, 'إنهاء الجلسة - نقل إلى روم الـ Done');
+      }
+    } catch (err) { /* ignore */ }
+
+    try {
+      const citizenUser = await client.users.fetch(citizenId);
+      const logMsgId = message.id;
+      const row = new ActionRowBuilder().addComponents(
+        [1,2,3,4,5].map(r => new ButtonBuilder()
+          .setCustomId(`rate_${r}_${adminId}_${logMsgId}`)
+          .setLabel(`${r}⭐`)
+          .setStyle(r === 5 ? ButtonStyle.Success : ButtonStyle.Secondary))
+      );
+      const dmEmbed = new EmbedBuilder()
+        .setColor(0x5865f2)
+        .setTitle('📝 تقييم الخدمة')
+        .setDescription(`تم الانتهاء من خدمتك بواسطة <@${adminId}> في مدة ${durationText}.\nفضلاً، قيم مستوى المساعدة من 1 إلى 5 نجوم:`)
+        .setThumbnail(`attachment://${SERVER_LOGO_FILENAME}`);
+      await citizenUser.send({ embeds: [dmEmbed], components: [row] });
+    } catch (err) { /* ignore */ }
+
+    activeSessions.delete(citizenId);
+    return;
+  }
+
   const currentCount = (doneCounts.get(adminId) || 0) + 1;
   doneCounts.set(adminId, currentCount);
   saveDoneCounts();
+  addDoneHistory(adminId, durationSec);
 
   const embed = EmbedBuilder.from(message.embeds[0]);
-
   const currentFields = embed.data.fields || [];
   const baseFields = currentFields.slice(0, 3);
 
@@ -520,10 +582,9 @@ async function endSession(guild, citizenId, adminId, startTime, message) {
 }
 
 // ============================================================
-// نظام السحب التلقائي (معدل لمنع السبام وإضافة الإداريين الجدد فقط)
+// نظام السحب التلقائي
 // ============================================================
 async function tryPullForAllFreeAdmins(guild) {
-  // الحصول على الإداريين المتوفرين حالياً
   const freeAdmins = [];
   for (const roomId of ADMIN_ROOM_IDS) {
     const channel = guild.channels.cache.get(roomId);
@@ -535,51 +596,36 @@ async function tryPullForAllFreeAdmins(guild) {
 
   if (freeAdmins.length === 0) return;
 
-  // البحث عن مواطن ينتظر في غرف الانتظار
   const candidate = getNextEligibleWaitingMember(guild);
   if (!candidate) return;
 
-  // منع التنفيذ المتزامن لنفس المواطن
   if (pullLocks.has(candidate.id)) return;
   pullLocks.add(candidate.id);
 
   try {
-    // التحقق من وجود جلسة معلقة لهذا المواطن
     let session = activeSessions.get(candidate.id);
 
     if (session) {
-      // إذا كانت الجلسة في حالة pending فقط نتعامل معها
       if (session.status === 'pending') {
-        // قائمة الإداريين الحاليين في الجلسة
         const currentAdmins = session.pendingAdmins || [];
-
-        // تصفية الإداريين المتوفرين الذين ليسوا في القائمة الحالية
         const newAdmins = freeAdmins.filter(fa => !currentAdmins.includes(fa.adminMember.id));
 
-        if (newAdmins.length === 0) {
-          // لا يوجد إداريين جدد، نخرج
-          return;
-        }
+        if (newAdmins.length === 0) return;
 
-        // إضافة الإداريين الجدد إلى قائمة المعلقين
         for (const { adminMember } of newAdmins) {
           session.pendingAdmins.push(adminMember.id);
-          // إرسال طلب جديد لكل إداري جديد
           const message = await sendSessionRequest(guild, candidate.user, adminMember.user);
           if (message) {
             session.messages[adminMember.id] = message;
           }
         }
-
         console.log(`📨 تم إرسال طلبات دعم جديدة لـ ${candidate.user.tag} إلى ${newAdmins.length} إداري إضافي`);
         return;
       } else {
-        // إذا كانت الجلسة في حالة أخرى (مقبولة أو منتهية) فلا نتدخل
         return;
       }
     }
 
-    // لا توجد جلسة، ننشئ جلسة جديدة ونرسل طلبات لكل الإداريين المتوفرين
     await sendCitizenNotification(candidate.user, freeAdmins[0].adminMember.user);
 
     const pendingAdmins = freeAdmins.map(fa => fa.adminMember.id);
@@ -669,7 +715,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  // ===== مراقبة بقاء المواطن في غرفة الانتظار 3 دقائق =====
   const enteredWaiting = WAITING_CHANNEL_IDS.includes(newState.channelId) && !WAITING_CHANNEL_IDS.includes(oldState.channelId);
   const leftWaiting = WAITING_CHANNEL_IDS.includes(oldState.channelId) && !WAITING_CHANNEL_IDS.includes(newState.channelId);
 
@@ -706,7 +751,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  // ===== المنطق الأصلي للسحب التلقائي (يستدعي الدالة المعدلة) =====
   const enteredWaitingOriginal = WAITING_CHANNEL_IDS.includes(newState.channelId) && !WAITING_CHANNEL_IDS.includes(oldState.channelId);
   if (enteredWaitingOriginal) {
     const member = await guild.members.fetch(userId).catch(() => null);
@@ -715,7 +759,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  // استدعاء السحب التلقائي في كل تغيير (لإضافة الإداريين الجدد)
   try {
     await tryPullForAllFreeAdmins(guild);
   } catch (err) {
@@ -724,7 +767,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 });
 
 // ============================================================
-// معالج التفاعلات (الكامل)
+// معالج التفاعلات (الكامل) - مع التعديل المطلوب
 // ============================================================
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
@@ -733,9 +776,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.customId && interaction.customId.startsWith('accept_session_')) {
         const parts = interaction.customId.split('_');
         const citizenId = parts[2];
-        const originalAdminId = parts[3]; // الإداري المستهدف في الزر
+        const originalAdminId = parts[3];
 
-        // التحقق من الصلاحية
         const hasFullAccept = interaction.member.roles.cache.has(ALLOWED_ACCEPT_ROLE_ID);
         const hasSelfAccept = interaction.member.roles.cache.has(SELF_ACCEPT_ROLE_ID) && interaction.user.id === originalAdminId;
 
@@ -754,15 +796,28 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.reply({ content: '⚠️ هذه الجلسة لم تعد معلقة.', ephemeral: true });
         }
 
+        // ===== التحقق من أن المواطن لا يزال في روم صوتي =====
+        const citizenMember = await interaction.guild.members.fetch(citizenId).catch(() => null);
+        if (!citizenMember || !citizenMember.voice.channel) {
+          // المواطن غادر الروم الصوتي، نلغي القبول وننهي الجلسة
+          // نرسل رسالة للمستخدم
+          await interaction.reply({
+            content: '❌ المواطن غادر الروم الصوتي، لا يمكن قبول الجلسة.',
+            ephemeral: true
+          });
+          // ننهي الجلسة و نزيلها من الخريطة
+          activeSessions.delete(citizenId);
+          return;
+        }
+
         const message = interaction.message;
         const result = await acceptSession(interaction.guild, citizenId, originalAdminId, message);
         if (!result.success) {
           return interaction.reply({ content: `⚠️ ${result.reason}`, ephemeral: true });
         }
 
-        // نقل المواطن إلى روم الإداري الأصلي
+        // نقل المواطن إلى روم الإداري الأصلي (الآن نضمن أنه متصل)
         try {
-          const citizenMember = await interaction.guild.members.fetch(citizenId);
           const adminMember = await interaction.guild.members.fetch(originalAdminId);
           const adminChannel = adminMember.voice.channel;
           if (adminChannel) {
@@ -779,6 +834,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: `✅ تم قبول الجلسة لصالح <@${originalAdminId}>.`, ephemeral: true });
       }
 
+      // ===== باقي الأزرار (رفض، إنهاء، تقييم، إجازات) تبقى كما هي =====
       if (interaction.customId && interaction.customId.startsWith('reject_session_')) {
         const parts = interaction.customId.split('_');
         const citizenId = parts[2];
@@ -882,7 +938,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      // ===== أزرار الإجازات والاستقالات =====
+      // ===== أزرار الإجازات والاستقالات (نفس الكود السابق) =====
       if (interaction.customId === 'open_leave_modal') {
         const modal = new ModalBuilder()
           .setCustomId('leave_modal')
