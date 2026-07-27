@@ -25,6 +25,9 @@ db.exec(`
     user_id TEXT PRIMARY KEY,
     end_date INTEGER
   );
+  CREATE TABLE IF NOT EXISTS evaluated_sessions (
+    session_id TEXT PRIMARY KEY
+  );
 `);
 
 // ===== المتغيرات البيئية =====
@@ -77,6 +80,12 @@ const ADMIN_ROOM_IDS = [
   '1519516058682130632',
 ];
 
+// ===== قناة التقييم =====
+const RATING_CHANNEL_ID = '1531018869764788446';
+
+// ===== روم الـ Done الصوتي (للتعرف على انتقال المواطن إليه) =====
+const DONE_VOICE_CHANNEL_ID = '1499086608010449089';
+
 function hasStaffRole(member) {
   return STAFF_ROLE_IDS.some((roleId) => member.roles.cache.has(roleId));
 }
@@ -97,6 +106,16 @@ function saveActiveLeaves() {
     for (const [userId, data] of entries) insert.run(userId, data.endDate);
   });
   trans(activeLeaves.entries());
+}
+
+function isSessionEvaluated(sessionId) {
+  const stmt = db.prepare('SELECT session_id FROM evaluated_sessions WHERE session_id = ?');
+  return stmt.get(sessionId) !== undefined;
+}
+
+function markSessionEvaluated(sessionId) {
+  const stmt = db.prepare('INSERT OR IGNORE INTO evaluated_sessions (session_id) VALUES (?)');
+  stmt.run(sessionId);
 }
 
 // ===== تحميل البيانات =====
@@ -124,6 +143,26 @@ const client = new Client({
 const activeSessions = new Map(); // citizenId -> { adminId, startTime }
 const cooldownMap = new Map();   // `${adminId}_${citizenId}` -> timestamp (end of cooldown)
 const waitingTimers = new Map(); // لإدارة تنبيه الانتظار
+
+// ============================================================
+// دوال التقييم
+// ============================================================
+function ratingStarsBar(rating) {
+  const filled = '⭐'.repeat(rating);
+  const empty = '☆'.repeat(5 - rating);
+  return filled + empty;
+}
+
+function ratingColor(rating) {
+  if (rating >= 4) return 0x2ecc71;
+  if (rating >= 2) return 0xf1a10c;
+  return 0xed4245;
+}
+
+function ratingLabel(rating) {
+  const labels = { 1: 'ضعيف جدًا', 2: 'ضعيف', 3: 'متوسط', 4: 'جيد', 5: 'ممتاز' };
+  return labels[rating] || '';
+}
 
 // ============================================================
 // حماية روم الإجازات
@@ -219,7 +258,6 @@ async function tryPullForAllFreeAdmins(guild) {
     const key = `${adminMember.id}_${candidate.id}`;
     const cooldownEnd = cooldownMap.get(key);
     if (cooldownEnd && cooldownEnd > Date.now()) {
-      // هذا الإداري لديه كول داون مع هذا المواطن، نستبعده
       return false;
     }
     return true;
@@ -230,7 +268,7 @@ async function tryPullForAllFreeAdmins(guild) {
     return;
   }
 
-  // اختيار أول إداري متاح (غير موجود في الكول داون)
+  // اختيار أول إداري متاح
   const { adminMember } = eligibleAdmins[0];
   const adminChannel = adminMember.voice.channel;
 
@@ -256,7 +294,7 @@ async function tryPullForAllFreeAdmins(guild) {
 }
 
 // ============================================================
-// دالة إنهاء الجلسة (بدون نقل إلى روم الـ Done)
+// دالة إنهاء الجلسة مع إرسال تقييم
 // ============================================================
 async function endSession(guild, citizenId, adminId, startTime) {
   const durationSec = Math.floor((Date.now() - startTime) / 1000);
@@ -268,27 +306,45 @@ async function endSession(guild, citizenId, adminId, startTime) {
   const cooldownKey = `${adminId}_${citizenId}`;
   cooldownMap.set(cooldownKey, Date.now() + 60 * 1000);
 
+  // إنشاء معرف فريد للجلسة لتجنب التقييم المكرر
+  const sessionId = `${adminId}_${citizenId}_${startTime}`;
+
   // حذف الجلسة من الخريطة
   activeSessions.delete(citizenId);
 
-  // إرسال رسالة إتمام للمواطن (بدون نقل إلى روم Done)
+  // إرسال رسالة التقييم للمواطن (مع أزرار التقييم)
   try {
     const citizenUser = await client.users.fetch(citizenId);
+    const row = new ActionRowBuilder().addComponents(
+      [1, 2, 3, 4, 5].map(r => 
+        new ButtonBuilder()
+          .setCustomId(`rate_${r}_${adminId}_${sessionId}`)
+          .setLabel(`${r}⭐`)
+          .setStyle(r === 5 ? ButtonStyle.Success : ButtonStyle.Secondary)
+      )
+    );
+
     const dmEmbed = new EmbedBuilder()
-      .setColor(0x57f287)
-      .setTitle('✅ انتهت جلستك')
-      .setDescription(`تم الانتهاء من خدمتك بواسطة <@${adminId}> في مدة ${durationText}.`)
+      .setColor(0x5865f2)
+      .setTitle('📝 تقييم الخدمة')
+      .setDescription(`تم الانتهاء من خدمتك بواسطة <@${adminId}> في مدة ${durationText}.\nفضلاً، قيم مستوى المساعدة من 1 إلى 5 نجوم:`)
       .setThumbnail(`attachment://${SERVER_LOGO_FILENAME}`)
       .setTimestamp();
+
     let logoFile = null;
     try {
       if (fs.existsSync(SERVER_LOGO_PATH)) {
         logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
       }
     } catch (e) {}
-    await citizenUser.send({ embeds: [dmEmbed], files: logoFile ? [logoFile] : [] });
+
+    await citizenUser.send({
+      embeds: [dmEmbed],
+      components: [row],
+      files: logoFile ? [logoFile] : []
+    });
   } catch (err) {
-    console.error('⚠️ تعذر إرسال رسالة إنهاء الجلسة للمواطن:', err);
+    console.error('⚠️ تعذر إرسال رسالة التقييم للمواطن:', err);
   }
 }
 
@@ -332,7 +388,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     const citizenVoice = newState;
 
     // شروط إنهاء الجلسة:
-    // 1. المواطن غادر روم الإداري
+    // 1. المواطن غادر روم الإداري (أو انتقل إلى روم الـ Done)
     const wasInAdminRoom = oldState.channelId && ADMIN_ROOM_IDS.includes(oldState.channelId);
     const isInAdminRoom = newState.channelId && ADMIN_ROOM_IDS.includes(newState.channelId);
     if (wasInAdminRoom && !isInAdminRoom) {
@@ -414,10 +470,61 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 });
 
 // ============================================================
-// معالج التفاعلات (الإجازات فقط)
+// معالج التفاعلات (الإجازات + التقييم)
 // ============================================================
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
+    // ===== أزرار التقييم =====
+    if (interaction.isButton() && interaction.customId.startsWith('rate_')) {
+      const parts = interaction.customId.split('_');
+      const rating = parseInt(parts[1]);
+      const adminId = parts[2];
+      const sessionId = parts.slice(3).join('_'); // قد يحتوي على underscores
+
+      // التحقق من أن التقييم لم يتم من قبل لهذه الجلسة
+      if (isSessionEvaluated(sessionId)) {
+        return interaction.reply({ content: '⚠️ تم التقييم مسبقاً.', ephemeral: true });
+      }
+
+      // تسجيل التقييم
+      markSessionEvaluated(sessionId);
+
+      const stars = ratingStarsBar(rating);
+
+      // تحديث رسالة التقييم (إزالة الأزرار وإظهار الشكر)
+      await interaction.update({
+        content: `✅ شكراً لك! (${stars})`,
+        embeds: [],
+        components: []
+      });
+
+      // إرسال التقييم إلى القناة المحددة
+      try {
+        const guild = client.guilds.cache.get(GUILD_ID);
+        const channel = guild.channels.cache.get(RATING_CHANNEL_ID);
+        if (channel) {
+          const logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
+          const embed = new EmbedBuilder()
+            .setColor(ratingColor(rating))
+            .setAuthor({ name: `${interaction.user.username} قيّم الخدمة`, iconURL: interaction.user.displayAvatarURL() })
+            .setTitle('🌟 تقييم إداري جديد')
+            .setThumbnail(`attachment://${SERVER_LOGO_FILENAME}`)
+            .addFields(
+              { name: 'المواطن', value: `<@${interaction.user.id}>`, inline: true },
+              { name: 'الإداري', value: `<@${adminId}>`, inline: true },
+              { name: '⭐ التقييم', value: `${stars}\n\`${rating}/5\` — ${ratingLabel(rating)}`, inline: false }
+            )
+            .setTimestamp();
+          await channel.send({ embeds: [embed], files: [logoFile] });
+        }
+      } catch (e) {
+        console.error('❌ خطأ في إرسال التقييم إلى القناة:', e);
+      }
+
+      return;
+    }
+
+    // ===== باقي الأزرار (الإجازات) =====
     if (interaction.isButton()) {
       // أزرار الإجازات والاستقالات
       if (interaction.customId === 'open_leave_modal') {
