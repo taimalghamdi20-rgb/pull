@@ -188,6 +188,41 @@ function ratingLabel(rating) {
 }
 
 // ============================================================
+// دوال جلب الإحصائيات
+// ============================================================
+async function fetchMessages(channelId, days) {
+  try {
+    const channel = client.channels.cache.get(channelId);
+    if (!channel) return [];
+    const limit = 1000;
+    const messages = [];
+    let lastId = null;
+    const until = Date.now() - days * 24 * 60 * 60 * 1000;
+    let fetched = 0;
+    while (fetched < limit) {
+      const options = { limit: 100 };
+      if (lastId) options.before = lastId;
+      const msgs = await channel.messages.fetch(options);
+      if (msgs.size === 0) break;
+      const filtered = msgs.filter(m => m.createdTimestamp >= until);
+      messages.push(...filtered.values());
+      lastId = msgs.last().id;
+      fetched += msgs.size;
+      if (filtered.size < msgs.size) break;
+    }
+    return messages;
+  } catch (err) {
+    console.error(`❌ فشل جلب رسائل القناة ${channelId}:`, err);
+    return [];
+  }
+}
+
+function extractNumberFromMessage(content) {
+  const match = content.match(/\b(\d+)\b/);
+  return match ? parseInt(match[1]) : 0;
+}
+
+// ============================================================
 // حماية روم الإجازات
 // ============================================================
 client.on(Events.MessageCreate, async (message) => {
@@ -778,7 +813,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [new EmbedBuilder().setTitle('📋 الإجازات النشطة').setColor(0x3ba55d).setDescription(desc)] });
       }
 
-      // ===== الأمر الجديد: barren =====
+      // ===== الأمر الجديد: barren مع الإحصائيات =====
       if (interaction.commandName === 'barren') {
         if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بالأدمنستريتر فقط.', ephemeral: true });
@@ -791,8 +826,36 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const censorshipRoleId = '1499102575918579793';
         const activationRoleId = '1486587636863864862';
 
-        const staffMembers = guild.members.cache.filter(m => m.roles.cache.has(staffRoleId));
+        // معرفات القنوات للإحصائيات
+        const censorshipDoneChannel = '1529933848144510976';
+        const censorshipTimeChannel = '1513220016718217228';
+        const activationDoneChannel = '1484859915200626829';
+        const activationTimeChannel = '1513231005815931000';
 
+        // جلب الرسائل لكل فريق (آخر 7 أيام)
+        const [censorshipDoneMsgs, censorshipTimeMsgs, activationDoneMsgs, activationTimeMsgs] = await Promise.all([
+          fetchMessages(censorshipDoneChannel, 7),
+          fetchMessages(censorshipTimeChannel, 7),
+          fetchMessages(activationDoneChannel, 7),
+          fetchMessages(activationTimeChannel, 7)
+        ]);
+
+        // دوال مساعدة لحساب الإحصائيات
+        function countDone(messages, adminId) {
+          return messages.filter(msg => msg.content.includes(`<@${adminId}>`)).length;
+        }
+        function sumTime(messages, adminId) {
+          let total = 0;
+          for (const msg of messages) {
+            if (msg.content.includes(`<@${adminId}>`)) {
+              total += extractNumberFromMessage(msg.content);
+            }
+          }
+          return total;
+        }
+
+        // تقسيم الأعضاء
+        const staffMembers = guild.members.cache.filter(m => m.roles.cache.has(staffRoleId));
         const censorshipMembers = [];
         const activationMembers = [];
 
@@ -804,26 +867,38 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }
         });
 
+        // بناء النص مع الإحصائيات
+        let censorshipText = `**<@&${censorshipRoleId}>**\n`;
+        if (censorshipMembers.length === 0) {
+          censorshipText += 'لا يوجد أعضاء\n';
+        } else {
+          for (const member of censorshipMembers) {
+            const done = countDone(censorshipDoneMsgs, member.id);
+            const time = sumTime(censorshipTimeMsgs, member.id);
+            censorshipText += `<@${member.id}> - عدد التفعيلات: ${done} | إجمالي الوقت: ${time} ثانية\n`;
+          }
+        }
+
+        let activationText = `**<@&${activationRoleId}>**\n`;
+        if (activationMembers.length === 0) {
+          activationText += 'لا يوجد أعضاء\n';
+        } else {
+          for (const member of activationMembers) {
+            const done = countDone(activationDoneMsgs, member.id);
+            const time = sumTime(activationTimeMsgs, member.id);
+            activationText += `<@${member.id}> - عدد التفعيلات: ${done} | إجمالي الوقت: ${time} ثانية\n`;
+          }
+        }
+
+        const content = censorshipText + '\n' + activationText;
+
         const embed = new EmbedBuilder()
           .setTitle('📋 جرد الاداره')
           .setColor(0xFFA500)
           .setTimestamp()
           .setFooter({ text: `تم الجرد بواسطة ${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() });
 
-        const censorshipMentions = censorshipMembers.length > 0 
-          ? censorshipMembers.map(m => `<@${m.id}>`).join('\n') 
-          : 'لا يوجد أعضاء';
-
-        const activationMentions = activationMembers.length > 0 
-          ? activationMembers.map(m => `<@${m.id}>`).join('\n') 
-          : 'لا يوجد أعضاء';
-
-        embed.addFields(
-          { name: `<@&${censorshipRoleId}>`, value: censorshipMentions, inline: false },
-          { name: `<@&${activationRoleId}>`, value: activationMentions, inline: false }
-        );
-
-        return interaction.reply({ embeds: [embed] });
+        return interaction.reply({ content: content, embeds: [embed] });
       }
     }
   } catch (error) {
