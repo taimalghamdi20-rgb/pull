@@ -813,11 +813,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [new EmbedBuilder().setTitle('📋 الإجازات النشطة').setColor(0x3ba55d).setDescription(desc)] });
       }
 
-      // ===== الأمر الجديد: barren مع الإحصائيات (معدل لتقسيم النص) =====
+      // ===== الأمر الجديد: barren مع الإحصائيات (معدل لتقسيم النص واستخدام deferReply) =====
       if (interaction.commandName === 'barren') {
+        // التحقق من الصلاحية أولاً
         if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بالأدمنستريتر فقط.', ephemeral: true });
         }
+
+        // تأجيل الرد لتجنب timeout
+        await interaction.deferReply();
 
         const guild = interaction.guild;
         await guild.members.fetch();
@@ -916,14 +920,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
           if (currentPart) parts.push(currentPart);
 
           // إرسال الرد الأول مع الإمبـد
-          await interaction.reply({ content: parts[0], embeds: [embed] });
+          await interaction.editReply({ content: parts[0], embeds: [embed] });
           // إرسال الأجزاء المتبقية بدون إمبـد
           for (let i = 1; i < parts.length; i++) {
             await interaction.followUp({ content: parts[i] });
           }
         } else {
           // النص قصير، نرسله مع الإمبـد
-          await interaction.reply({ content: fullContent, embeds: [embed] });
+          await interaction.editReply({ content: fullContent, embeds: [embed] });
         }
       }
     }
@@ -931,6 +935,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     console.error('❌ خطأ في التفاعل:', error);
     if (!interaction.replied && !interaction.deferred) {
       await interaction.reply({ content: '❌ حدث خطأ.', ephemeral: true }).catch(() => null);
+    } else if (interaction.deferred) {
+      await interaction.editReply({ content: '❌ حدث خطأ أثناء تنفيذ الأمر.' }).catch(() => null);
     }
   }
 });
