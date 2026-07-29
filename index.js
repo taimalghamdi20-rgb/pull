@@ -188,7 +188,7 @@ function ratingLabel(rating) {
 }
 
 // ============================================================
-// دوال جلب الإحصائيات
+// دوال جلب الإحصائيات (معدلة لاستخراج الوقت من الإمبـدات)
 // ============================================================
 async function fetchMessages(channelId, days) {
   try {
@@ -217,9 +217,59 @@ async function fetchMessages(channelId, days) {
   }
 }
 
-function extractTimeFromMessage(content) {
-  const match = content.match(/\b(\d+)\b/);
-  return match ? parseInt(match[1]) : 0;
+// دالة لاستخراج الوقت من الإمبـد (Total Time)
+function extractTimeFromEmbed(embed) {
+  if (!embed) return 0;
+  if (embed.fields) {
+    for (const field of embed.fields) {
+      if (field.name && field.name.includes('Total Time')) {
+        // استخراج الوقت من النص (مثل "11h 46m 7s")
+        const text = field.value || '';
+        const match = text.match(/(\d+)\s*h/i);
+        const hours = match ? parseInt(match[1]) : 0;
+        const matchMin = text.match(/(\d+)\s*m/i);
+        const minutes = matchMin ? parseInt(matchMin[1]) : 0;
+        const matchSec = text.match(/(\d+)\s*s/i);
+        const seconds = matchSec ? parseInt(matchSec[1]) : 0;
+        return hours * 3600 + minutes * 60 + seconds;
+      }
+    }
+  }
+  return 0;
+}
+
+// دالة لحساب عدد الـ Done من رسائل القناة (نبحث عن المنشن في المحتوى)
+function countDone(messages, adminId) {
+  return messages.filter(msg => msg.content.includes(`<@${adminId}>`)).length;
+}
+
+// دالة لحساب إجمالي الوقت من رسائل القناة (نبحث عن الإمبـدات التي تحتوي على Total Time ومنشن الإداري)
+function sumTimeFromMessages(messages, adminId) {
+  let total = 0;
+  for (const msg of messages) {
+    // نتأكد أن الرسالة تحتوي على منشن الإداري
+    if (!msg.content.includes(`<@${adminId}>`)) continue;
+    // البحث في الإمبـدات
+    if (msg.embeds && msg.embeds.length > 0) {
+      for (const embed of msg.embeds) {
+        total += extractTimeFromEmbed(embed);
+      }
+    }
+  }
+  return total;
+}
+
+// دالة لتحويل الثواني إلى نص مقروء
+function formatTime(seconds) {
+  if (seconds === 0) return '0 ثانية';
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+  let parts = [];
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0) parts.push(`${minutes}m`);
+  if (secs > 0) parts.push(`${secs}s`);
+  return parts.join(' ');
 }
 
 // ============================================================
@@ -813,7 +863,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [new EmbedBuilder().setTitle('📋 الإجازات النشطة').setColor(0x3ba55d).setDescription(desc)] });
       }
 
-      // ===== الأمر الجديد: barren =====
+      // ===== الأمر الجديد: barren مع الإحصائيات (معدل) =====
       if (interaction.commandName === 'barren') {
         if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بالأدمنستريتر فقط.', ephemeral: true });
@@ -829,10 +879,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const activationRoleId = '1486587636863864862';
 
         // معرفات القنوات للإحصائيات
-        const censorshipDoneChannel = '1529933848144510976';
-        const censorshipTimeChannel = '1513220016718217228';
-        const activationDoneChannel = '1484859915200626829';
-        const activationTimeChannel = '1513231005815931000';
+        const censorshipDoneChannel = '1529933848144510976';   // عدد التفعيلات لـ Censorship
+        const censorshipTimeChannel = '1513220016718217228';    // Total Time لـ Censorship
+        const activationDoneChannel = '1484859915200626829';    // عدد التفعيلات لـ Activation
+        const activationTimeChannel = '1513231005815931000';     // Total Time لـ Activation
 
         // جلب الرسائل لآخر 7 أيام
         const days = 7;
@@ -842,33 +892,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           fetchMessages(activationDoneChannel, days),
           fetchMessages(activationTimeChannel, days)
         ]);
-
-        // دوال مساعدة
-        function countDone(messages, adminId) {
-          return messages.filter(msg => msg.content.includes(`<@${adminId}>`)).length;
-        }
-
-        function sumTime(messages, adminId) {
-          let total = 0;
-          for (const msg of messages) {
-            if (msg.content.includes(`<@${adminId}>`)) {
-              total += extractTimeFromMessage(msg.content);
-            }
-          }
-          return total;
-        }
-
-        function formatTime(seconds) {
-          if (seconds === 0) return '0 ثانية';
-          const hours = Math.floor(seconds / 3600);
-          const minutes = Math.floor((seconds % 3600) / 60);
-          const secs = seconds % 60;
-          let parts = [];
-          if (hours > 0) parts.push(`${hours} ساعة`);
-          if (minutes > 0) parts.push(`${minutes} دقيقة`);
-          if (secs > 0) parts.push(`${secs} ثانية`);
-          return parts.join(' ');
-        }
 
         // تقسيم الأعضاء
         const staffMembers = guild.members.cache.filter(m => m.roles.cache.has(staffRoleId));
@@ -890,7 +913,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         } else {
           for (const member of censorshipMembers) {
             const done = countDone(censorshipDoneMsgs, member.id);
-            const timeSec = sumTime(censorshipTimeMsgs, member.id);
+            const timeSec = sumTimeFromMessages(censorshipTimeMsgs, member.id);
             const timeFormatted = formatTime(timeSec);
             censorshipText += `<@${member.id}> - عدد التفعيلات: ${done} | إجمالي الوقت: ${timeFormatted}\n`;
           }
@@ -902,7 +925,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         } else {
           for (const member of activationMembers) {
             const done = countDone(activationDoneMsgs, member.id);
-            const timeSec = sumTime(activationTimeMsgs, member.id);
+            const timeSec = sumTimeFromMessages(activationTimeMsgs, member.id);
             const timeFormatted = formatTime(timeSec);
             activationText += `<@${member.id}> - عدد التفعيلات: ${done} | إجمالي الوقت: ${timeFormatted}\n`;
           }
