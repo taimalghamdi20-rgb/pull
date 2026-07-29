@@ -780,20 +780,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       // ===== الأمر الجديد: barren =====
       if (interaction.commandName === 'barren') {
-        // التحقق من صلاحية Administrator
         if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بالأدمنستريتر فقط.', ephemeral: true });
         }
 
         const guild = interaction.guild;
-        await guild.members.fetch(); // تحديث الكاش
+        await guild.members.fetch();
 
-        // معرفات الرتب
         const staffRoleId = '1459304465458008196';
         const censorshipRoleId = '1499102575918579793';
         const activationRoleId = '1486587636863864862';
 
-        // جلب جميع الأعضاء الذين لديهم رتبة الإدارة
         const staffMembers = guild.members.cache.filter(m => m.roles.cache.has(staffRoleId));
 
         const censorshipMembers = [];
@@ -807,10 +804,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }
         });
 
-        // بناء الإمبـد
         const embed = new EmbedBuilder()
           .setTitle('📋 جرد الاداره')
-          .setColor(0xFFA500) // لون برتقالي
+          .setColor(0xFFA500)
           .setTimestamp()
           .setFooter({ text: `تم الجرد بواسطة ${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() });
 
