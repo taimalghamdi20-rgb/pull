@@ -188,7 +188,7 @@ function ratingLabel(rating) {
 }
 
 // ============================================================
-// دوال جلب الإحصائيات (معدلة لاستخراج الوقت من الإمبـدات)
+// دوال جلب الإحصائيات (معدلة لاستخراج الوقت والمنشن من الإمبـدات)
 // ============================================================
 async function fetchMessages(channelId, days) {
   try {
@@ -217,77 +217,95 @@ async function fetchMessages(channelId, days) {
   }
 }
 
-// دالة محسنة لاستخراج الوقت من الإمبـد
+// دالة محسنة لاستخراج الوقت من الإمبـد (أكثر مرونة مع الصيغ المختلفة)
 function extractTimeFromEmbed(embed) {
   if (!embed) return 0;
-  
-  // جمع كل النصوص الممكنة من الإمبـد
-  let allText = '';
-  
-  // إضافة العنوان والوصف
-  if (embed.title) allText += ' ' + embed.title;
-  if (embed.description) allText += ' ' + embed.description;
-  
-  // إضافة نصوص الحقول
+  // دالة مساعدة لاستخراج الأرقام من النص
+  function extractNumbers(text) {
+    if (!text) return { hours: 0, minutes: 0, seconds: 0 };
+    let hours = 0, minutes = 0, seconds = 0;
+    // أنماط الساعات
+    const hMatch = text.match(/(\d+)\s*(?:h|ساعة|س|hours)/i);
+    if (hMatch) hours = parseInt(hMatch[1]);
+    // أنماط الدقائق
+    const mMatch = text.match(/(\d+)\s*(?:m|دقيقة|د|minutes)/i);
+    if (mMatch) minutes = parseInt(mMatch[1]);
+    // أنماط الثواني
+    const sMatch = text.match(/(\d+)\s*(?:s|ثانية|ث|seconds)/i);
+    if (sMatch) seconds = parseInt(sMatch[1]);
+    return { hours, minutes, seconds };
+  }
+
+  // البحث في الحقول
   if (embed.fields) {
     for (const field of embed.fields) {
-      allText += ' ' + field.name + ' ' + field.value;
+      const name = field.name.toLowerCase();
+      if (name.includes('total') || name.includes('time') || name.includes('إجمالي') || name.includes('وقت')) {
+        const { hours, minutes, seconds } = extractNumbers(field.value);
+        return hours * 3600 + minutes * 60 + seconds;
+      }
     }
   }
-  
-  // البحث عن الأرقام مع وحدات الزمن
-  let hours = 0, minutes = 0, seconds = 0;
-  
-  // البحث عن الساعات
-  const hourMatch = allText.match(/(\d+)\s*(?:h|ساعة|س|hours|hour)/i);
-  if (hourMatch) hours = parseInt(hourMatch[1]);
-  
-  // البحث عن الدقائق
-  const minMatch = allText.match(/(\d+)\s*(?:m|دقيقة|د|minutes|minute)/i);
-  if (minMatch) minutes = parseInt(minMatch[1]);
-  
-  // البحث عن الثواني
-  const secMatch = allText.match(/(\d+)\s*(?:s|ثانية|ث|seconds|second)/i);
-  if (secMatch) seconds = parseInt(secMatch[1]);
-  
-  // إذا لم نجد شيئاً، نحاول البحث عن نمط "Xh Ym Zs"
-  const fullMatch = allText.match(/(\d+)\s*h\s*(\d+)\s*m\s*(\d+)\s*s/i);
-  if (fullMatch) {
-    hours = parseInt(fullMatch[1]);
-    minutes = parseInt(fullMatch[2]);
-    seconds = parseInt(fullMatch[3]);
+  // البحث في الوصف
+  if (embed.description) {
+    const { hours, minutes, seconds } = extractNumbers(embed.description);
+    if (hours || minutes || seconds) return hours * 3600 + minutes * 60 + seconds;
   }
-  
-  // محاولة البحث عن نمط عربي "X ساعة Y دقيقة Z ثانية"
-  const arabicMatch = allText.match(/(\d+)\s*ساعة\s*(\d+)\s*دقيقة\s*(\d+)\s*ثانية/i);
-  if (arabicMatch) {
-    hours = parseInt(arabicMatch[1]);
-    minutes = parseInt(arabicMatch[2]);
-    seconds = parseInt(arabicMatch[3]);
+  // البحث في العنوان
+  if (embed.title) {
+    const { hours, minutes, seconds } = extractNumbers(embed.title);
+    if (hours || minutes || seconds) return hours * 3600 + minutes * 60 + seconds;
   }
-  
-  return hours * 3600 + minutes * 60 + seconds;
+  return 0;
 }
 
-// دالة لحساب عدد الـ Done من رسائل القناة (نبحث عن المنشن في المحتوى)
+// دالة لاستخراج منشن الإداري من الرسالة (من المحتوى أو الإمبـد)
+function extractAdminIdFromMessage(msg) {
+  // البحث في المحتوى
+  const contentMatch = msg.content.match(/<@!?(\d+)>/);
+  if (contentMatch) return contentMatch[1];
+  // البحث في الإمبـدات
+  if (msg.embeds && msg.embeds.length > 0) {
+    for (const embed of msg.embeds) {
+      // البحث في الوصف
+      if (embed.description) {
+        const descMatch = embed.description.match(/<@!?(\d+)>/);
+        if (descMatch) return descMatch[1];
+      }
+      // البحث في الحقول
+      if (embed.fields) {
+        for (const field of embed.fields) {
+          const fieldMatch = field.value.match(/<@!?(\d+)>/);
+          if (fieldMatch) return fieldMatch[1];
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// دالة لحساب عدد الـ Done من رسائل القناة
 function countDone(messages, adminId) {
   return messages.filter(msg => msg.content.includes(`<@${adminId}>`)).length;
 }
 
-// دالة لحساب إجمالي الوقت من رسائل القناة (نبحث عن الإمبـدات التي تحتوي على Total Time ومنشن الإداري)
-function sumTimeFromMessages(messages, adminId) {
-  let total = 0;
+// دالة لحساب إجمالي الوقت لكل إداري من رسائل قناة الوقت
+function calculateTotalTimePerAdmin(messages) {
+  const timeMap = new Map(); // adminId -> total seconds
   for (const msg of messages) {
-    // نتأكد أن الرسالة تحتوي على منشن الإداري (في المحتوى)
-    if (!msg.content.includes(`<@${adminId}>`)) continue;
-    // البحث في الإمبـدات
+    const adminId = extractAdminIdFromMessage(msg);
+    if (!adminId) continue;
+    let time = 0;
     if (msg.embeds && msg.embeds.length > 0) {
       for (const embed of msg.embeds) {
-        total += extractTimeFromEmbed(embed);
+        time += extractTimeFromEmbed(embed);
       }
     }
+    if (time > 0) {
+      timeMap.set(adminId, (timeMap.get(adminId) || 0) + time);
+    }
   }
-  return total;
+  return timeMap;
 }
 
 // دالة لتحويل الثواني إلى نص مقروء
@@ -924,6 +942,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
           fetchMessages(activationTimeChannel, days)
         ]);
 
+        // حساب إجمالي الوقت لكل إداري من رسائل الوقت
+        const censorshipTimeMap = calculateTotalTimePerAdmin(censorshipTimeMsgs);
+        const activationTimeMap = calculateTotalTimePerAdmin(activationTimeMsgs);
+
         // تقسيم الأعضاء
         const staffMembers = guild.members.cache.filter(m => m.roles.cache.has(staffRoleId));
         const censorshipMembers = [];
@@ -944,7 +966,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         } else {
           for (const member of censorshipMembers) {
             const done = countDone(censorshipDoneMsgs, member.id);
-            const timeSec = sumTimeFromMessages(censorshipTimeMsgs, member.id);
+            const timeSec = censorshipTimeMap.get(member.id) || 0;
             const timeFormatted = formatTime(timeSec);
             censorshipText += `<@${member.id}> - عدد التفعيلات: ${done} | إجمالي الوقت: ${timeFormatted}\n`;
           }
@@ -956,7 +978,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         } else {
           for (const member of activationMembers) {
             const done = countDone(activationDoneMsgs, member.id);
-            const timeSec = sumTimeFromMessages(activationTimeMsgs, member.id);
+            const timeSec = activationTimeMap.get(member.id) || 0;
             const timeFormatted = formatTime(timeSec);
             activationText += `<@${member.id}> - عدد التفعيلات: ${done} | إجمالي الوقت: ${timeFormatted}\n`;
           }
