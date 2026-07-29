@@ -217,7 +217,7 @@ async function fetchMessages(channelId, days) {
   }
 }
 
-function extractNumberFromMessage(content) {
+function extractTimeFromMessage(content) {
   const match = content.match(/\b(\d+)\b/);
   return match ? parseInt(match[1]) : 0;
 }
@@ -813,14 +813,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [new EmbedBuilder().setTitle('📋 الإجازات النشطة').setColor(0x3ba55d).setDescription(desc)] });
       }
 
-      // ===== الأمر الجديد: barren مع الإحصائيات (معدل لتقسيم النص واستخدام deferReply) =====
+      // ===== الأمر الجديد: barren =====
       if (interaction.commandName === 'barren') {
-        // التحقق من الصلاحية أولاً
         if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بالأدمنستريتر فقط.', ephemeral: true });
         }
 
-        // تأجيل الرد لتجنب timeout
         await interaction.deferReply();
 
         const guild = interaction.guild;
@@ -836,26 +834,40 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const activationDoneChannel = '1484859915200626829';
         const activationTimeChannel = '1513231005815931000';
 
-        // جلب الرسائل لكل فريق (آخر 7 أيام)
+        // جلب الرسائل لآخر 7 أيام
+        const days = 7;
         const [censorshipDoneMsgs, censorshipTimeMsgs, activationDoneMsgs, activationTimeMsgs] = await Promise.all([
-          fetchMessages(censorshipDoneChannel, 7),
-          fetchMessages(censorshipTimeChannel, 7),
-          fetchMessages(activationDoneChannel, 7),
-          fetchMessages(activationTimeChannel, 7)
+          fetchMessages(censorshipDoneChannel, days),
+          fetchMessages(censorshipTimeChannel, days),
+          fetchMessages(activationDoneChannel, days),
+          fetchMessages(activationTimeChannel, days)
         ]);
 
-        // دوال مساعدة لحساب الإحصائيات
+        // دوال مساعدة
         function countDone(messages, adminId) {
           return messages.filter(msg => msg.content.includes(`<@${adminId}>`)).length;
         }
+
         function sumTime(messages, adminId) {
           let total = 0;
           for (const msg of messages) {
             if (msg.content.includes(`<@${adminId}>`)) {
-              total += extractNumberFromMessage(msg.content);
+              total += extractTimeFromMessage(msg.content);
             }
           }
           return total;
+        }
+
+        function formatTime(seconds) {
+          if (seconds === 0) return '0 ثانية';
+          const hours = Math.floor(seconds / 3600);
+          const minutes = Math.floor((seconds % 3600) / 60);
+          const secs = seconds % 60;
+          let parts = [];
+          if (hours > 0) parts.push(`${hours} ساعة`);
+          if (minutes > 0) parts.push(`${minutes} دقيقة`);
+          if (secs > 0) parts.push(`${secs} ثانية`);
+          return parts.join(' ');
         }
 
         // تقسيم الأعضاء
@@ -871,15 +883,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }
         });
 
-        // بناء النص مع الإحصائيات
+        // بناء النصوص
         let censorshipText = `**<@&${censorshipRoleId}>**\n`;
         if (censorshipMembers.length === 0) {
           censorshipText += 'لا يوجد أعضاء\n';
         } else {
           for (const member of censorshipMembers) {
             const done = countDone(censorshipDoneMsgs, member.id);
-            const time = sumTime(censorshipTimeMsgs, member.id);
-            censorshipText += `<@${member.id}> - عدد التفعيلات: ${done} | إجمالي الوقت: ${time} ثانية\n`;
+            const timeSec = sumTime(censorshipTimeMsgs, member.id);
+            const timeFormatted = formatTime(timeSec);
+            censorshipText += `<@${member.id}> - عدد التفعيلات: ${done} | إجمالي الوقت: ${timeFormatted}\n`;
           }
         }
 
@@ -889,24 +902,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
         } else {
           for (const member of activationMembers) {
             const done = countDone(activationDoneMsgs, member.id);
-            const time = sumTime(activationTimeMsgs, member.id);
-            activationText += `<@${member.id}> - عدد التفعيلات: ${done} | إجمالي الوقت: ${time} ثانية\n`;
+            const timeSec = sumTime(activationTimeMsgs, member.id);
+            const timeFormatted = formatTime(timeSec);
+            activationText += `<@${member.id}> - عدد التفعيلات: ${done} | إجمالي الوقت: ${timeFormatted}\n`;
           }
         }
 
         const fullContent = censorshipText + '\n' + activationText;
 
-        // الإمبـد
         const embed = new EmbedBuilder()
           .setTitle('📋 جرد الاداره')
           .setColor(0xFFA500)
           .setTimestamp()
           .setFooter({ text: `تم الجرد بواسطة ${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() });
 
-        // تقسيم النص إذا تجاوز 2000 حرف
-        const MAX_LENGTH = 1900; // نترك مسافة آمنة
+        // تقسيم النص الطويل
+        const MAX_LENGTH = 1900;
         if (fullContent.length > MAX_LENGTH) {
-          // نقسم النص إلى أجزاء بناءً على الأسطر
           const parts = [];
           let currentPart = '';
           const lines = fullContent.split('\n');
@@ -919,14 +931,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }
           if (currentPart) parts.push(currentPart);
 
-          // إرسال الرد الأول مع الإمبـد
           await interaction.editReply({ content: parts[0], embeds: [embed] });
-          // إرسال الأجزاء المتبقية بدون إمبـد
           for (let i = 1; i < parts.length; i++) {
             await interaction.followUp({ content: parts[i] });
           }
         } else {
-          // النص قصير، نرسله مع الإمبـد
           await interaction.editReply({ content: fullContent, embeds: [embed] });
         }
       }
