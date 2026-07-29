@@ -217,23 +217,41 @@ async function fetchMessages(channelId, days) {
   }
 }
 
-// دالة لاستخراج الوقت من الإمبـد (Total Time)
+// دالة محسنة لاستخراج الوقت من الإمبـد (أكثر مرونة)
 function extractTimeFromEmbed(embed) {
   if (!embed) return 0;
+  // البحث في الحقول
   if (embed.fields) {
     for (const field of embed.fields) {
-      if (field.name && field.name.includes('Total Time')) {
-        // استخراج الوقت من النص (مثل "11h 46m 7s")
+      const name = field.name.toLowerCase();
+      // البحث عن حقل يحتوي على كلمات مفتاحية مثل 'total', 'time', 'إجمالي', 'وقت'
+      if (name.includes('total') || name.includes('time') || name.includes('إجمالي') || name.includes('وقت')) {
         const text = field.value || '';
-        const match = text.match(/(\d+)\s*h/i);
-        const hours = match ? parseInt(match[1]) : 0;
-        const matchMin = text.match(/(\d+)\s*m/i);
-        const minutes = matchMin ? parseInt(matchMin[1]) : 0;
-        const matchSec = text.match(/(\d+)\s*s/i);
-        const seconds = matchSec ? parseInt(matchSec[1]) : 0;
+        // محاولة استخراج الساعات والدقائق والثواني
+        let hours = 0, minutes = 0, seconds = 0;
+        // نمط الساعات: رقم متبوع بـ h أو ساعة
+        const hourMatch = text.match(/(\d+)\s*(?:h|ساعة|س)/i);
+        if (hourMatch) hours = parseInt(hourMatch[1]);
+        // نمط الدقائق: رقم متبوع بـ m أو دقيقة
+        const minMatch = text.match(/(\d+)\s*(?:m|دقيقة|د)/i);
+        if (minMatch) minutes = parseInt(minMatch[1]);
+        // نمط الثواني: رقم متبوع بـ s أو ثانية
+        const secMatch = text.match(/(\d+)\s*(?:s|ثانية|ث)/i);
+        if (secMatch) seconds = parseInt(secMatch[1]);
         return hours * 3600 + minutes * 60 + seconds;
       }
     }
+  }
+  // إذا لم نجد في الحقول، نبحث في الوصف أو العنوان
+  const text = embed.description || embed.title || '';
+  if (text) {
+    const hourMatch = text.match(/(\d+)\s*(?:h|ساعة|س)/i);
+    const minMatch = text.match(/(\d+)\s*(?:m|دقيقة|د)/i);
+    const secMatch = text.match(/(\d+)\s*(?:s|ثانية|ث)/i);
+    const hours = hourMatch ? parseInt(hourMatch[1]) : 0;
+    const minutes = minMatch ? parseInt(minMatch[1]) : 0;
+    const seconds = secMatch ? parseInt(secMatch[1]) : 0;
+    return hours * 3600 + minutes * 60 + seconds;
   }
   return 0;
 }
@@ -247,7 +265,7 @@ function countDone(messages, adminId) {
 function sumTimeFromMessages(messages, adminId) {
   let total = 0;
   for (const msg of messages) {
-    // نتأكد أن الرسالة تحتوي على منشن الإداري
+    // نتأكد أن الرسالة تحتوي على منشن الإداري (في المحتوى)
     if (!msg.content.includes(`<@${adminId}>`)) continue;
     // البحث في الإمبـدات
     if (msg.embeds && msg.embeds.length > 0) {
