@@ -217,43 +217,56 @@ async function fetchMessages(channelId, days) {
   }
 }
 
-// دالة محسنة لاستخراج الوقت من الإمبـد (أكثر مرونة)
+// دالة محسنة لاستخراج الوقت من الإمبـد
 function extractTimeFromEmbed(embed) {
   if (!embed) return 0;
-  // البحث في الحقول
+  
+  // جمع كل النصوص الممكنة من الإمبـد
+  let allText = '';
+  
+  // إضافة العنوان والوصف
+  if (embed.title) allText += ' ' + embed.title;
+  if (embed.description) allText += ' ' + embed.description;
+  
+  // إضافة نصوص الحقول
   if (embed.fields) {
     for (const field of embed.fields) {
-      const name = field.name.toLowerCase();
-      // البحث عن حقل يحتوي على كلمات مفتاحية مثل 'total', 'time', 'إجمالي', 'وقت'
-      if (name.includes('total') || name.includes('time') || name.includes('إجمالي') || name.includes('وقت')) {
-        const text = field.value || '';
-        // محاولة استخراج الساعات والدقائق والثواني
-        let hours = 0, minutes = 0, seconds = 0;
-        // نمط الساعات: رقم متبوع بـ h أو ساعة
-        const hourMatch = text.match(/(\d+)\s*(?:h|ساعة|س)/i);
-        if (hourMatch) hours = parseInt(hourMatch[1]);
-        // نمط الدقائق: رقم متبوع بـ m أو دقيقة
-        const minMatch = text.match(/(\d+)\s*(?:m|دقيقة|د)/i);
-        if (minMatch) minutes = parseInt(minMatch[1]);
-        // نمط الثواني: رقم متبوع بـ s أو ثانية
-        const secMatch = text.match(/(\d+)\s*(?:s|ثانية|ث)/i);
-        if (secMatch) seconds = parseInt(secMatch[1]);
-        return hours * 3600 + minutes * 60 + seconds;
-      }
+      allText += ' ' + field.name + ' ' + field.value;
     }
   }
-  // إذا لم نجد في الحقول، نبحث في الوصف أو العنوان
-  const text = embed.description || embed.title || '';
-  if (text) {
-    const hourMatch = text.match(/(\d+)\s*(?:h|ساعة|س)/i);
-    const minMatch = text.match(/(\d+)\s*(?:m|دقيقة|د)/i);
-    const secMatch = text.match(/(\d+)\s*(?:s|ثانية|ث)/i);
-    const hours = hourMatch ? parseInt(hourMatch[1]) : 0;
-    const minutes = minMatch ? parseInt(minMatch[1]) : 0;
-    const seconds = secMatch ? parseInt(secMatch[1]) : 0;
-    return hours * 3600 + minutes * 60 + seconds;
+  
+  // البحث عن الأرقام مع وحدات الزمن
+  let hours = 0, minutes = 0, seconds = 0;
+  
+  // البحث عن الساعات
+  const hourMatch = allText.match(/(\d+)\s*(?:h|ساعة|س|hours|hour)/i);
+  if (hourMatch) hours = parseInt(hourMatch[1]);
+  
+  // البحث عن الدقائق
+  const minMatch = allText.match(/(\d+)\s*(?:m|دقيقة|د|minutes|minute)/i);
+  if (minMatch) minutes = parseInt(minMatch[1]);
+  
+  // البحث عن الثواني
+  const secMatch = allText.match(/(\d+)\s*(?:s|ثانية|ث|seconds|second)/i);
+  if (secMatch) seconds = parseInt(secMatch[1]);
+  
+  // إذا لم نجد شيئاً، نحاول البحث عن نمط "Xh Ym Zs"
+  const fullMatch = allText.match(/(\d+)\s*h\s*(\d+)\s*m\s*(\d+)\s*s/i);
+  if (fullMatch) {
+    hours = parseInt(fullMatch[1]);
+    minutes = parseInt(fullMatch[2]);
+    seconds = parseInt(fullMatch[3]);
   }
-  return 0;
+  
+  // محاولة البحث عن نمط عربي "X ساعة Y دقيقة Z ثانية"
+  const arabicMatch = allText.match(/(\d+)\s*ساعة\s*(\d+)\s*دقيقة\s*(\d+)\s*ثانية/i);
+  if (arabicMatch) {
+    hours = parseInt(arabicMatch[1]);
+    minutes = parseInt(arabicMatch[2]);
+    seconds = parseInt(arabicMatch[3]);
+  }
+  
+  return hours * 3600 + minutes * 60 + seconds;
 }
 
 // دالة لحساب عدد الـ Done من رسائل القناة (نبحث عن المنشن في المحتوى)
