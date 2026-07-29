@@ -54,6 +54,27 @@ const WAITING_CHANNEL_IDS = [
   ...ADDITIONAL_WAITING_IDS
 ];
 
+// ===== خريطة روم الانتظار -> رومات الإدارة المخصصة =====
+const WAITING_ROOM_ADMIN_MAP = {
+  '1519511668823167116': [
+    '1531980761039638618',
+    '1531980726134636574',
+    '1531980042031075388',
+    '1531982552863215676'
+  ],
+  '1481398869463138604': [
+    '1499105265272754246',
+    '1499105221383819497',
+    '1499105170716491806',
+    '1525972362246226041',
+    '1499105092933128212',
+    '1499084679083720805',
+    '1499352796435058848',
+    '1499352980120403989',
+    '1499353050907938916'
+  ]
+};
+
 // ===== إعدادات عامة =====
 const LEAVE_EMBED_CHANNEL_ID = '1529495796247167178';
 const LEAVE_PANEL_CHANNEL_ID = '1529440458030321714';
@@ -65,6 +86,7 @@ const WAITING_NOTIFICATION_CHANNEL_ID = '1530276832203636737';
 const WAITING_MENTION_ROLE_ID = '1499102575918579793';
 const WAITING_TIMEOUT_MS = 3 * 60 * 1000;
 
+// ===== رومات الإدارة العامة (لرومات الانتظار غير المخصصة) =====
 const ADMIN_ROOM_IDS = [
   '1499105265272754246',
   '1499105221383819497',
@@ -185,20 +207,24 @@ function isDeafened(voiceState) {
   return voiceState.selfDeaf || voiceState.serverDeaf;
 }
 
+// تعديل هذه الدالة لتعيد المواطن مع رقم روم الانتظار الذي هو فيه
 function getNextEligibleWaitingMember(guild) {
   for (const waitingId of WAITING_CHANNEL_IDS) {
     const waitingChannel = guild.channels.cache.get(waitingId);
     if (!waitingChannel || !waitingChannel.members) continue;
     for (const [, member] of waitingChannel.members) {
-      return member;
+      // نتأكد أنه ليس إداري
+      if (!hasStaffRole(member)) {
+        return { member, waitingChannelId: waitingId };
+      }
     }
   }
   return null;
 }
 
-function isFreeAdminRoom(channel) {
+function isFreeAdminRoom(channel, targetAdminRoomIds) {
   if (!channel || channel.type !== 2) return false;
-  if (!ADMIN_ROOM_IDS.includes(channel.id)) return false;
+  if (!targetAdminRoomIds.includes(channel.id)) return false;
   const members = [...channel.members.values()];
   if (members.length !== 1) return false;
   const adminMember = members[0];
@@ -234,21 +260,31 @@ async function sendCitizenNotification(citizenUser, adminUser) {
 }
 
 async function tryPullForAllFreeAdmins(guild) {
-  // جلب الإداريين المتفرغين
+  // الحصول على أول مواطن في الانتظار مع رقم روم الانتظار
+  const waitingData = getNextEligibleWaitingMember(guild);
+  if (!waitingData) return;
+
+  const { member: candidate, waitingChannelId } = waitingData;
+
+  // تحديد قائمة رومات الإدارة المستهدفة بناءً على روم الانتظار
+  let targetAdminRoomIds;
+  if (WAITING_ROOM_ADMIN_MAP[waitingChannelId]) {
+    targetAdminRoomIds = WAITING_ROOM_ADMIN_MAP[waitingChannelId];
+  } else {
+    targetAdminRoomIds = ADMIN_ROOM_IDS; // القائمة العامة
+  }
+
+  // جلب الإداريين المتفرغين من الرومات المستهدفة فقط
   const freeAdmins = [];
-  for (const roomId of ADMIN_ROOM_IDS) {
+  for (const roomId of targetAdminRoomIds) {
     const channel = guild.channels.cache.get(roomId);
     if (!channel) continue;
-    if (!isFreeAdminRoom(channel)) continue;
+    if (!isFreeAdminRoom(channel, targetAdminRoomIds)) continue;
     const adminMember = channel.members.first();
     freeAdmins.push({ channel, adminMember });
   }
 
   if (freeAdmins.length === 0) return;
-
-  // الحصول على أول مواطن في الانتظار
-  const candidate = getNextEligibleWaitingMember(guild);
-  if (!candidate) return;
 
   // التحقق من عدم وجود جلسة نشطة لهذا المواطن
   if (activeSessions.has(candidate.id)) return;
@@ -264,7 +300,7 @@ async function tryPullForAllFreeAdmins(guild) {
   });
 
   if (eligibleAdmins.length === 0) {
-    console.log(`⏳ جميع الإداريين المتفرغين في كول داون مع ${candidate.user.tag}`);
+    console.log(`⏳ جميع الإداريين المتفرغين في الكول داون مع ${candidate.user.tag}`);
     return;
   }
 
