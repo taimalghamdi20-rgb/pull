@@ -517,7 +517,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 });
 
 // ============================================================
-// معالج التفاعلات (الإجازات + التقييم)
+// معالج التفاعلات (الإجازات + التقييم + barren)
 // ============================================================
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
@@ -813,7 +813,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [new EmbedBuilder().setTitle('📋 الإجازات النشطة').setColor(0x3ba55d).setDescription(desc)] });
       }
 
-      // ===== الأمر الجديد: barren مع الإحصائيات =====
+      // ===== الأمر الجديد: barren مع الإحصائيات (معدل لتقسيم النص) =====
       if (interaction.commandName === 'barren') {
         if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بالأدمنستريتر فقط.', ephemeral: true });
@@ -890,15 +890,41 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }
         }
 
-        const content = censorshipText + '\n' + activationText;
+        const fullContent = censorshipText + '\n' + activationText;
 
+        // الإمبـد
         const embed = new EmbedBuilder()
           .setTitle('📋 جرد الاداره')
           .setColor(0xFFA500)
           .setTimestamp()
           .setFooter({ text: `تم الجرد بواسطة ${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() });
 
-        return interaction.reply({ content: content, embeds: [embed] });
+        // تقسيم النص إذا تجاوز 2000 حرف
+        const MAX_LENGTH = 1900; // نترك مسافة آمنة
+        if (fullContent.length > MAX_LENGTH) {
+          // نقسم النص إلى أجزاء بناءً على الأسطر
+          const parts = [];
+          let currentPart = '';
+          const lines = fullContent.split('\n');
+          for (const line of lines) {
+            if (currentPart.length + line.length + 1 > MAX_LENGTH) {
+              parts.push(currentPart);
+              currentPart = '';
+            }
+            currentPart += (currentPart ? '\n' : '') + line;
+          }
+          if (currentPart) parts.push(currentPart);
+
+          // إرسال الرد الأول مع الإمبـد
+          await interaction.reply({ content: parts[0], embeds: [embed] });
+          // إرسال الأجزاء المتبقية بدون إمبـد
+          for (let i = 1; i < parts.length; i++) {
+            await interaction.followUp({ content: parts[i] });
+          }
+        } else {
+          // النص قصير، نرسله مع الإمبـد
+          await interaction.reply({ content: fullContent, embeds: [embed] });
+        }
       }
     }
   } catch (error) {
