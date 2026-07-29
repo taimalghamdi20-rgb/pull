@@ -13,6 +13,7 @@ const {
   TextInputBuilder,
   TextInputStyle,
   AttachmentBuilder,
+  PermissionFlagsBits,
 } = require('discord.js');
 
 // ===== قاعدة بيانات SQLite =====
@@ -105,7 +106,7 @@ const ADMIN_ROOM_IDS = [
 // ===== قناة التقييم =====
 const RATING_CHANNEL_ID = '1531018869764788446';
 
-// ===== روم الـ Done الصوتي (للتعرف على انتقال المواطن إليه) =====
+// ===== روم الـ Done الصوتي =====
 const DONE_VOICE_CHANNEL_ID = '1499086608010449089';
 
 function hasStaffRole(member) {
@@ -207,13 +208,11 @@ function isDeafened(voiceState) {
   return voiceState.selfDeaf || voiceState.serverDeaf;
 }
 
-// تعديل هذه الدالة لتعيد المواطن مع رقم روم الانتظار الذي هو فيه
 function getNextEligibleWaitingMember(guild) {
   for (const waitingId of WAITING_CHANNEL_IDS) {
     const waitingChannel = guild.channels.cache.get(waitingId);
     if (!waitingChannel || !waitingChannel.members) continue;
     for (const [, member] of waitingChannel.members) {
-      // نتأكد أنه ليس إداري
       if (!hasStaffRole(member)) {
         return { member, waitingChannelId: waitingId };
       }
@@ -260,21 +259,18 @@ async function sendCitizenNotification(citizenUser, adminUser) {
 }
 
 async function tryPullForAllFreeAdmins(guild) {
-  // الحصول على أول مواطن في الانتظار مع رقم روم الانتظار
   const waitingData = getNextEligibleWaitingMember(guild);
   if (!waitingData) return;
 
   const { member: candidate, waitingChannelId } = waitingData;
 
-  // تحديد قائمة رومات الإدارة المستهدفة بناءً على روم الانتظار
   let targetAdminRoomIds;
   if (WAITING_ROOM_ADMIN_MAP[waitingChannelId]) {
     targetAdminRoomIds = WAITING_ROOM_ADMIN_MAP[waitingChannelId];
   } else {
-    targetAdminRoomIds = ADMIN_ROOM_IDS; // القائمة العامة
+    targetAdminRoomIds = ADMIN_ROOM_IDS;
   }
 
-  // جلب الإداريين المتفرغين من الرومات المستهدفة فقط
   const freeAdmins = [];
   for (const roomId of targetAdminRoomIds) {
     const channel = guild.channels.cache.get(roomId);
@@ -286,10 +282,8 @@ async function tryPullForAllFreeAdmins(guild) {
 
   if (freeAdmins.length === 0) return;
 
-  // التحقق من عدم وجود جلسة نشطة لهذا المواطن
   if (activeSessions.has(candidate.id)) return;
 
-  // تصفية الإداريين حسب الكول داون (كل إداري مع هذا المواطن)
   const eligibleAdmins = freeAdmins.filter(({ adminMember }) => {
     const key = `${adminMember.id}_${candidate.id}`;
     const cooldownEnd = cooldownMap.get(key);
@@ -304,23 +298,19 @@ async function tryPullForAllFreeAdmins(guild) {
     return;
   }
 
-  // اختيار أول إداري متاح
   const { adminMember } = eligibleAdmins[0];
   const adminChannel = adminMember.voice.channel;
 
   if (!adminChannel) return;
 
   try {
-    // نقل المواطن إلى روم الإداري
     await candidate.voice.setChannel(adminChannel.id, 'سحب تلقائي - جلسة دعم');
 
-    // تسجيل الجلسة النشطة
     activeSessions.set(candidate.id, {
       adminId: adminMember.id,
       startTime: Date.now()
     });
 
-    // إرسال إشعار للمواطن
     await sendCitizenNotification(candidate.user, adminMember.user);
 
     console.log(`✅ تم سحب ${candidate.user.tag} إلى ${adminMember.user.tag}`);
@@ -338,17 +328,13 @@ async function endSession(guild, citizenId, adminId, startTime) {
   const seconds = durationSec % 60;
   const durationText = minutes > 0 ? `${minutes} دقيقة و ${seconds} ثانية` : `${seconds} ثانية`;
 
-  // تطبيق كول داون لهذا المواطن مع هذا الإداري لمدة دقيقة
   const cooldownKey = `${adminId}_${citizenId}`;
   cooldownMap.set(cooldownKey, Date.now() + 60 * 1000);
 
-  // إنشاء معرف فريد للجلسة لتجنب التقييم المكرر
   const sessionId = `${adminId}_${citizenId}_${startTime}`;
 
-  // حذف الجلسة من الخريطة
   activeSessions.delete(citizenId);
 
-  // إرسال رسالة التقييم للمواطن (مع أزرار التقييم)
   try {
     const citizenUser = await client.users.fetch(citizenId);
     const row = new ActionRowBuilder().addComponents(
@@ -392,7 +378,8 @@ client.once(Events.ClientReady, async (c) => {
   try {
     const commands = [
       { name: 'send_leave_panel', description: 'إرسال لوحة طلبات الإجازات والاستقالات' },
-      { name: 'active_leaves', description: 'عرض قائمة الإداريين المجازين' }
+      { name: 'active_leaves', description: 'عرض قائمة الإداريين المجازين' },
+      { name: 'barren', description: 'جرد الاداره وعرض الفرق' }
     ];
     await c.application.commands.set(commands, GUILD_ID);
     console.log('✅ تم تسجيل الأوامر.');
@@ -409,13 +396,11 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   if (!guild || guild.id !== GUILD_ID) return;
   const userId = newState.id;
 
-  // ----- التعامل مع الجلسات النشطة -----
   const session = activeSessions.get(userId);
   if (session) {
     const adminId = session.adminId;
     const adminMember = await guild.members.fetch(adminId).catch(() => null);
     if (!adminMember) {
-      // الإداري غير موجود (غادر السيرفر) -> إنهاء الجلسة
       await endSession(guild, userId, adminId, session.startTime);
       return;
     }
@@ -423,8 +408,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     const adminVoice = adminMember.voice;
     const citizenVoice = newState;
 
-    // شروط إنهاء الجلسة:
-    // 1. المواطن غادر روم الإداري (أو انتقل إلى روم الـ Done)
     const wasInAdminRoom = oldState.channelId && ADMIN_ROOM_IDS.includes(oldState.channelId);
     const isInAdminRoom = newState.channelId && ADMIN_ROOM_IDS.includes(newState.channelId);
     if (wasInAdminRoom && !isInAdminRoom) {
@@ -432,7 +415,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
       return;
     }
 
-    // 2. الإداري غادر رومه أو أصبح مكتوماً
     if (adminVoice.channelId && !ADMIN_ROOM_IDS.includes(adminVoice.channelId)) {
       await endSession(guild, userId, adminId, session.startTime);
       return;
@@ -442,25 +424,21 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
       return;
     }
 
-    // 3. الإداري ليس في أي روم
     if (!adminVoice.channelId) {
       await endSession(guild, userId, adminId, session.startTime);
       return;
     }
   }
 
-  // ----- مراقبة دخول المواطن إلى روم الانتظار -----
   const enteredWaiting = WAITING_CHANNEL_IDS.includes(newState.channelId) && !WAITING_CHANNEL_IDS.includes(oldState.channelId);
   const leftWaiting = WAITING_CHANNEL_IDS.includes(oldState.channelId) && !WAITING_CHANNEL_IDS.includes(newState.channelId);
 
   if (enteredWaiting) {
     const member = await guild.members.fetch(userId).catch(() => null);
     if (member && !hasStaffRole(member)) {
-      // إلغاء أي مؤقت سابق
       const oldEntry = waitingTimers.get(userId);
       if (oldEntry) clearTimeout(oldEntry.timeout);
 
-      // تعيين مؤقت 3 دقائق
       const timer = setTimeout(async () => {
         const currentMember = await guild.members.fetch(userId).catch(() => null);
         if (!currentMember) return;
@@ -488,7 +466,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  // ----- محاولة السحب التلقائي عند دخول مواطن أو تغير حالة الإداريين -----
   const enteredWaitingOriginal = WAITING_CHANNEL_IDS.includes(newState.channelId) && !WAITING_CHANNEL_IDS.includes(oldState.channelId);
   if (enteredWaitingOriginal) {
     const member = await guild.members.fetch(userId).catch(() => null);
@@ -497,7 +474,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  // السحب التلقائي عند أي تغيير في الصوت (مثل دخول إداري إلى رومه)
   try {
     await tryPullForAllFreeAdmins(guild);
   } catch (err) {
@@ -515,26 +491,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const parts = interaction.customId.split('_');
       const rating = parseInt(parts[1]);
       const adminId = parts[2];
-      const sessionId = parts.slice(3).join('_'); // قد يحتوي على underscores
+      const sessionId = parts.slice(3).join('_');
 
-      // التحقق من أن التقييم لم يتم من قبل لهذه الجلسة
       if (isSessionEvaluated(sessionId)) {
         return interaction.reply({ content: '⚠️ تم التقييم مسبقاً.', ephemeral: true });
       }
 
-      // تسجيل التقييم
       markSessionEvaluated(sessionId);
 
       const stars = ratingStarsBar(rating);
 
-      // تحديث رسالة التقييم (إزالة الأزرار وإظهار الشكر)
       await interaction.update({
         content: `✅ شكراً لك! (${stars})`,
         embeds: [],
         components: []
       });
 
-      // إرسال التقييم إلى القناة المحددة
       try {
         const guild = client.guilds.cache.get(GUILD_ID);
         const channel = guild.channels.cache.get(RATING_CHANNEL_ID);
@@ -562,7 +534,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     // ===== باقي الأزرار (الإجازات) =====
     if (interaction.isButton()) {
-      // أزرار الإجازات والاستقالات
       if (interaction.customId === 'open_leave_modal') {
         const modal = new ModalBuilder()
           .setCustomId('leave_modal')
@@ -805,6 +776,58 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
         if (!desc) desc = '✅ جميع الإجازات انتهت.';
         return interaction.reply({ embeds: [new EmbedBuilder().setTitle('📋 الإجازات النشطة').setColor(0x3ba55d).setDescription(desc)] });
+      }
+
+      // ===== الأمر الجديد: barren =====
+      if (interaction.commandName === 'barren') {
+        // التحقق من صلاحية Administrator
+        if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+          return interaction.reply({ content: '❌ هذا الأمر خاص بالأدمنستريتر فقط.', ephemeral: true });
+        }
+
+        const guild = interaction.guild;
+        await guild.members.fetch(); // تحديث الكاش
+
+        // معرفات الرتب
+        const staffRoleId = '1459304465458008196';
+        const censorshipRoleId = '1499102575918579793';
+        const activationRoleId = '1486587636863864862';
+
+        // جلب جميع الأعضاء الذين لديهم رتبة الإدارة
+        const staffMembers = guild.members.cache.filter(m => m.roles.cache.has(staffRoleId));
+
+        const censorshipMembers = [];
+        const activationMembers = [];
+
+        staffMembers.forEach(member => {
+          if (member.roles.cache.has(censorshipRoleId)) {
+            censorshipMembers.push(member);
+          } else if (member.roles.cache.has(activationRoleId)) {
+            activationMembers.push(member);
+          }
+        });
+
+        // بناء الإمبـد
+        const embed = new EmbedBuilder()
+          .setTitle('📋 جرد الاداره')
+          .setColor(0xFFA500) // لون برتقالي
+          .setTimestamp()
+          .setFooter({ text: `تم الجرد بواسطة ${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() });
+
+        const censorshipMentions = censorshipMembers.length > 0 
+          ? censorshipMembers.map(m => `<@${m.id}>`).join('\n') 
+          : 'لا يوجد أعضاء';
+
+        const activationMentions = activationMembers.length > 0 
+          ? activationMembers.map(m => `<@${m.id}>`).join('\n') 
+          : 'لا يوجد أعضاء';
+
+        embed.addFields(
+          { name: `<@&${censorshipRoleId}>`, value: censorshipMentions, inline: false },
+          { name: `<@&${activationRoleId}>`, value: activationMentions, inline: false }
+        );
+
+        return interaction.reply({ embeds: [embed] });
       }
     }
   } catch (error) {
