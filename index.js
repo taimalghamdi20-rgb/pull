@@ -860,23 +860,62 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         const guild = interaction.guild;
         
-        // ==== الحل النهائي: جلب كل الأعضاء + تحديث الكاش بالقوة ====
+        // ===== إضافة الـ console.log =====
+        console.log('==================== بدء جرد فريق التفعيل ====================');
+        
+        // جلب جميع الأعضاء بالقوة
         console.log('🔄 جاري جلب جميع أعضاء السيرفر...');
         await guild.members.fetch({ withPresences: false, force: true });
-        console.log(`✅ تم جلب ${guild.members.cache.size} عضو.`);
+        console.log(`✅ تم جلب ${guild.members.cache.size} عضو في الكاش.`);
 
         const targetRoleId = '1486587636863864862';
+        console.log(`🎯 الرتبة المستهدفة: ${targetRoleId}`);
 
-        // جلب الرتبة للتأكد من وجودها
+        // جلب الرتبة
         const role = guild.roles.cache.get(targetRoleId);
         if (!role) {
+          console.log('❌ الرتبة غير موجودة في الكاش!');
           return interaction.editReply({ content: '❌ الرتبة غير موجودة.' });
         }
+        console.log(`✅ تم العثور على الرتبة: "${role.name}" (${role.id})`);
 
-        // الآن استخدام filter على الكاش المحدث
+        // عدد الأعضاء من role.members (مباشر من الرتبة)
+        console.log(`📊 عدد الأعضاء في role.members: ${role.members.size}`);
+        
+        // عدد الأعضاء من الفلتر
         const members = guild.members.cache.filter(m => m.roles.cache.has(targetRoleId));
+        console.log(`📊 عدد الأعضاء بعد الفلتر (guild.members.cache.filter): ${members.size}`);
+
+        // إذا كان العدد مختلف، نعرض بعض الـ IDs للمقارنة
+        if (role.members.size !== members.size) {
+          console.log('⚠️ يوجد اختلاف في الأعداد!');
+          const roleMemberIds = new Set(role.members.map(m => m.id));
+          const filterMemberIds = new Set(members.map(m => m.id));
+          
+          // أعضاء في role.members وليس في الفلتر
+          const missingInFilter = new Set([...roleMemberIds].filter(id => !filterMemberIds.has(id)));
+          if (missingInFilter.size > 0) {
+            console.log(`❌ أعضاء موجودين في role.members لكن مفقودين في الفلتر (${missingInFilter.size}):`);
+            for (const id of missingInFilter) {
+              const member = guild.members.cache.get(id);
+              console.log(`   - ${member ? member.user.tag : id} (ID: ${id})`);
+            }
+          }
+          
+          // أعضاء في الفلتر وليس في role.members
+          const missingInRole = new Set([...filterMemberIds].filter(id => !roleMemberIds.has(id)));
+          if (missingInRole.size > 0) {
+            console.log(`❌ أعضاء موجودين في الفلتر لكن مفقودين في role.members (${missingInRole.size}):`);
+            for (const id of missingInRole) {
+              const member = guild.members.cache.get(id);
+              console.log(`   - ${member ? member.user.tag : id} (ID: ${id})`);
+            }
+          }
+        }
+
         const memberCount = members.size;
-        console.log(`✅ عدد الأعضاء الذين يمتلكون الرتبة: ${memberCount}`);
+        console.log(`✅ العدد النهائي للأعضاء الذين سيجردون: ${memberCount}`);
+        console.log('==============================================================\n');
 
         if (memberCount === 0) {
           return interaction.editReply({ content: '❌ لا يوجد أعضاء في فريق التفعيل.' });
