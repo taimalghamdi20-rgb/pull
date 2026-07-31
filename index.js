@@ -910,40 +910,35 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         stats.sort((a, b) => b.activates - a.activates);
 
-        // بناء الإمبـد الأساسي
-        const embed = new EmbedBuilder()
-          .setTitle('📊 جرد فريق التفعيل')
-          .setColor(0x5865f2)
-          .setDescription(`**الفترة:** آخر ${days} يوم (من ${new Date(Date.now() - days*24*60*60*1000).toLocaleDateString('ar-SA')} إلى ${new Date().toLocaleDateString('ar-SA')})`)
-          .setThumbnail(`attachment://${SERVER_LOGO_FILENAME}`)
-          .setTimestamp();
-
-        let description = '';
+        // بناء النص
+        let text = `📊 جرد فريق التفعيل\n`;
+        text += `**الفترة:** آخر ${days} يوم (من ${new Date(Date.now() - days*24*60*60*1000).toLocaleDateString('ar-SA')} إلى ${new Date().toLocaleDateString('ar-SA')})\n\n`;
+        
         for (const stat of stats) {
-          description += `<@${stat.member.id}>\n`;
-          description += `**الرتب:** ${stat.roleMentions}\n`;
-          description += `▪️ **تفعيل شخص:** ${stat.activates}\n`;
-          description += `▪️ **رفض شخص:** ${stat.rejects}\n`;
-          description += `▪️ **إعادة تفعيل شخص:** ${stat.reactivates}\n\n`;
+          text += `<@${stat.member.id}>\n`;
+          text += `**الرتب:** ${stat.roleMentions}\n`;
+          text += `▪️ **تفعيل شخص:** ${stat.activates}\n`;
+          text += `▪️ **رفض شخص:** ${stat.rejects}\n`;
+          text += `▪️ **إعادة تفعيل شخص:** ${stat.reactivates}\n\n`;
         }
 
         const totalCount = stats.length;
-        description += `\n**تم جرد ${totalCount} شخص.**`;
+        text += `**تم جرد ${totalCount} شخص.**`;
 
-        // ===== التعديل الأساسي: استخدام 4000 كحد أقصى =====
-        const MAX_DESC_LENGTH = 4000;
+        // ===== إرسال النص كرسائل عادية =====
+        const MAX_MSG_LENGTH = 2000;
         const logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
 
-        if (description.length > MAX_DESC_LENGTH) {
-          console.log(`📝 النص طويل (${description.length} حرف)، جاري التقسيم...`);
+        if (text.length > MAX_MSG_LENGTH) {
+          console.log(`📝 النص طويل (${text.length} حرف)، جاري التقسيم...`);
           
           // تقسيم النص إلى أجزاء مع الحفاظ على سلامة الأسطر
           const parts = [];
           let currentPart = '';
-          const lines = description.split('\n');
+          const lines = text.split('\n');
           for (const line of lines) {
             // إذا كان السطر الحالي سيجعل الجزء يتجاوز الحد، نبدأ جزءاً جديداً
-            if ((currentPart + line + '\n').length > MAX_DESC_LENGTH) {
+            if ((currentPart + line + '\n').length > MAX_MSG_LENGTH) {
               parts.push(currentPart);
               currentPart = '';
             }
@@ -952,11 +947,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
           if (currentPart) parts.push(currentPart);
 
           console.log(`📊 عدد الأجزاء: ${parts.length}`);
-          // حساب عدد الأعضاء في كل جزء بشكل صحيح (باستثناء منشنات الرتب)
-          console.log(`📊 عدد الأعضاء في كل جزء:`);
+          // حساب عدد الأعضاء في كل جزء
           let totalDisplayed = 0;
           for (let i = 0; i < parts.length; i++) {
-            // البحث عن منشنات الأعضاء: <@ رقم > و <@! رقم >
             const memberMentions = parts[i].match(/<@!?(\d+)>/g);
             const memberCount = memberMentions ? memberMentions.length : 0;
             totalDisplayed += memberCount;
@@ -965,26 +958,26 @@ client.on(Events.InteractionCreate, async (interaction) => {
           console.log(`📊 إجمالي الأعضاء المعروضين: ${totalDisplayed}`);
 
           const totalParts = parts.length;
-          // إرسال كل جزء مع رقمه
+          // إرسال كل جزء مع تذييل
           for (let i = 0; i < parts.length; i++) {
             const partNumber = i + 1;
-            const embedPart = EmbedBuilder.from(embed)
-              .setDescription(parts[i])
-              .setFooter({ text: `الجزء ${partNumber}/${totalParts} • إجمالي المجردين: ${totalCount}` });
+            const header = `📊 جرد فريق التفعيل (الجزء ${partNumber}/${totalParts})\n`;
+            const footer = `\n**تم جرد ${totalCount} شخص.**`;
+            const content = header + parts[i] + footer;
             
             if (i === 0) {
-              await interaction.editReply({ embeds: [embedPart], files: [logoFile] });
+              await interaction.editReply({ content: content, files: [logoFile] });
               console.log(`✅ تم إرسال الجزء ${partNumber}`);
             } else {
-              await interaction.followUp({ embeds: [embedPart] });
+              await interaction.followUp({ content: content });
               console.log(`✅ تم إرسال الجزء ${partNumber}`);
             }
           }
           console.log('✅ تم إرسال جميع الأجزاء بنجاح.');
         } else {
-          embed.setDescription(description);
-          await interaction.editReply({ embeds: [embed], files: [logoFile] });
-          console.log('✅ تم إرسال الإمبـد كاملاً.');
+          // إرسال النص كاملاً
+          await interaction.editReply({ content: text, files: [logoFile] });
+          console.log('✅ تم إرسال النص كاملاً.');
         }
 
         console.log(`✅ اكتمل الجرد: ${totalCount} شخص.`);
