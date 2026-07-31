@@ -856,7 +856,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       // ===== أمر barren (متاح فقط لرتبة BARREN_ROLE_ID) =====
       if (interaction.commandName === 'barren') {
-        // التحقق من الرتبة المخصصة
         if (!hasBarrenRole(interaction.member)) {
           return interaction.reply({ 
             content: '❌ هذا الأمر مخصص لأعضاء رتبة محددة فقط.', 
@@ -867,7 +866,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.deferReply();
 
         const guild = interaction.guild;
-        await guild.members.fetch();
+        
+        // جلب جميع الأعضاء من السيرفر بقوة
+        await guild.members.fetch({ withPresences: false });
 
         const targetRoleId = '1486587636863864862'; // Activation Team
 
@@ -884,12 +885,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           fetchMessages(reactivateChannel, days)
         ]);
 
-        // ===== التعديل الرئيسي: جلب الرتبة واستخدام role.members =====
-        const role = guild.roles.cache.get(targetRoleId);
-        if (!role) {
-          return interaction.editReply({ content: '❌ الرتبة غير موجودة.' });
-        }
-        const members = role.members;
+        // الحصول على الأعضاء الذين يمتلكون الرتبة
+        const members = guild.members.cache.filter(m => m.roles.cache.has(targetRoleId));
 
         if (members.size === 0) {
           return interaction.editReply({ content: '❌ لا يوجد أعضاء في فريق التفعيل.' });
@@ -934,6 +931,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
           description += `▪️ **رفض شخص:** ${stat.rejects}\n`;
           description += `▪️ **إعادة تفعيل شخص:** ${stat.reactivates}\n\n`;
         }
+
+        // إضافة عدد الأشخاص المجردين في النهاية
+        description += `\n**تم جرد ${stats.length} شخص.**`;
 
         // تقسيم النص الطويل إذا تجاوز الحد
         const MAX_DESC_LENGTH = 4000;
