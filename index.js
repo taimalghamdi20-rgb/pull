@@ -240,14 +240,14 @@ async function fetchMessages(channelId, days) {
     const limit = 1000;
     const messages = [];
     let lastId = null;
-    const until = Date.now() - days * 24 * 60 * 60 * 1000;
+    const until = days === 999 ? 0 : Date.now() - days * 24 * 60 * 60 * 1000; // 999 = جلب كل شيء
     let fetched = 0;
     while (fetched < limit) {
       const options = { limit: 100 };
       if (lastId) options.before = lastId;
       const msgs = await channel.messages.fetch(options);
       if (msgs.size === 0) break;
-      const filtered = msgs.filter(m => m.createdTimestamp >= until);
+      const filtered = until === 0 ? msgs : msgs.filter(m => m.createdTimestamp >= until);
       messages.push(...filtered.values());
       lastId = msgs.last().id;
       fetched += msgs.size;
@@ -854,9 +854,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [new EmbedBuilder().setTitle('📋 الإجازات النشطة').setColor(0x3ba55d).setDescription(desc)] });
       }
 
-      // ===== أمر barren (متاح فقط لرتبة BARREN_ROLE_ID) =====
+      // ===== أمر barren =====
       if (interaction.commandName === 'barren') {
-        // التحقق من الرتبة المخصصة
         if (!hasBarrenRole(interaction.member)) {
           return interaction.reply({ 
             content: '❌ هذا الأمر مخصص لأعضاء رتبة محددة فقط.', 
@@ -870,18 +869,34 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await guild.members.fetch();
 
         const targetRoleId = '1486587636863864862'; // Activation Team
+        const promotionsChannelId = '1459305425857155308'; // قناة الترقيـات
+
+        // جلب رسائل قناة الترقيـات (جميعها)
+        const promotionMessages = await fetchMessages(promotionsChannelId, 999);
+
+        // ===== دالة لاستخراج آخر تاريخ ترقية لعضو =====
+        function getLastPromotionDate(memberId) {
+          let lastDate = null;
+          for (const msg of promotionMessages) {
+            if (msg.content.includes(`<@${memberId}>`)) {
+              if (!lastDate || msg.createdTimestamp > lastDate) {
+                lastDate = msg.createdTimestamp;
+              }
+            }
+          }
+          return lastDate;
+        }
 
         // قنوات الإحصائيات
-        const activateChannel = '1484859915200626829';   // تفعيل شخص
-        const rejectChannel = '1484865429158756494';     // رفض شخص
-        const reactivateChannel = '1493565275428225125'; // إعادة تفعيل شخص
+        const activateChannel = '1484859915200626829';
+        const rejectChannel = '1484865429158756494';
+        const reactivateChannel = '1493565275428225125';
 
-        // جلب الرسائل لآخر 7 أيام
-        const days = 7;
+        // جلب رسائل الإحصائيات (جميعها)
         const [activateMsgs, rejectMsgs, reactivateMsgs] = await Promise.all([
-          fetchMessages(activateChannel, days),
-          fetchMessages(rejectChannel, days),
-          fetchMessages(reactivateChannel, days)
+          fetchMessages(activateChannel, 999),
+          fetchMessages(rejectChannel, 999),
+          fetchMessages(reactivateChannel, 999)
         ]);
 
         // جلب أعضاء الرتبة
@@ -894,11 +909,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
         // حساب الإحصائيات لكل عضو
         const stats = [];
         for (const [id, member] of members) {
-          const activates = activateMsgs.filter(msg => msg.content.includes(`<@${id}>`)).length;
-          const rejects = rejectMsgs.filter(msg => msg.content.includes(`<@${id}>`)).length;
-          const reactivates = reactivateMsgs.filter(msg => msg.content.includes(`<@${id}>`)).length;
+          const lastPromotion = getLastPromotionDate(id);
+          if (!lastPromotion) continue; // تخطي الأعضاء الذين لم يتم ترقيتهم
 
-          // جلب الرتب التي يملكها العضو من القائمة المسموح بها
+          const activates = activateMsgs.filter(msg => 
+            msg.content.includes(`<@${id}>`) && msg.createdTimestamp >= lastPromotion
+          ).length;
+          const rejects = rejectMsgs.filter(msg => 
+            msg.content.includes(`<@${id}>`) && msg.createdTimestamp >= lastPromotion
+          ).length;
+          const reactivates = reactivateMsgs.filter(msg => 
+            msg.content.includes(`<@${id}>`) && msg.createdTimestamp >= lastPromotion
+          ).length;
+
           const roles = member.roles.cache.filter(role => ALLOWED_ROLE_IDS.includes(role.id));
           const roleMentions = roles.map(role => `<@&${role.id}>`).join(' ') || 'لا يوجد رتبة';
 
@@ -907,7 +930,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
             activates,
             rejects,
             reactivates,
-            roleMentions
+            roleMentions,
+            lastPromotion
           });
         }
 
@@ -918,20 +942,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const embed = new EmbedBuilder()
           .setTitle('📊 جرد فريق التفعيل')
           .setColor(0x5865f2)
-          .setDescription(`**الفترة:** آخر ${days} يوم (من ${new Date(Date.now() - days*24*60*60*1000).toLocaleDateString('ar-SA')} إلى ${new Date().toLocaleDateString('ar-SA')})`)
+          .setDescription(`**الفترة:** من تاريخ آخر ترقية لكل عضو حتى الآن`)
           .setThumbnail(`attachment://${SERVER_LOGO_FILENAME}`)
           .setTimestamp();
 
         let description = '';
         for (const stat of stats) {
+          const lastPromoDate = new Date(stat.lastPromotion).toLocaleDateString('ar-SA');
           description += `<@${stat.member.id}>\n`;
           description += `**الرتب:** ${stat.roleMentions}\n`;
+          description += `**آخر ترقية:** ${lastPromoDate}\n`;
           description += `▪️ **تفعيل شخص:** ${stat.activates}\n`;
           description += `▪️ **رفض شخص:** ${stat.rejects}\n`;
           description += `▪️ **إعادة تفعيل شخص:** ${stat.reactivates}\n\n`;
         }
 
-        // تقسيم النص الطويل إذا تجاوز الحد
+        // تقسيم النص الطويل
         const MAX_DESC_LENGTH = 4000;
         if (description.length > MAX_DESC_LENGTH) {
           const parts = [];
