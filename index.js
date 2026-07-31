@@ -205,6 +205,36 @@ function ratingLabel(rating) {
 }
 
 // ============================================================
+// دوال جلب الإحصائيات (لأمر barren)
+// ============================================================
+async function fetchMessages(channelId, days) {
+  try {
+    const channel = client.channels.cache.get(channelId);
+    if (!channel) return [];
+    const limit = 1000;
+    const messages = [];
+    let lastId = null;
+    const until = Date.now() - days * 24 * 60 * 60 * 1000;
+    let fetched = 0;
+    while (fetched < limit) {
+      const options = { limit: 100 };
+      if (lastId) options.before = lastId;
+      const msgs = await channel.messages.fetch(options);
+      if (msgs.size === 0) break;
+      const filtered = msgs.filter(m => m.createdTimestamp >= until);
+      messages.push(...filtered.values());
+      lastId = msgs.last().id;
+      fetched += msgs.size;
+      if (filtered.size < msgs.size) break;
+    }
+    return messages;
+  } catch (err) {
+    console.error(`❌ فشل جلب رسائل القناة ${channelId}:`, err);
+    return [];
+  }
+}
+
+// ============================================================
 // حماية روم الإجازات
 // ============================================================
 client.on(Events.MessageCreate, async (message) => {
@@ -398,7 +428,8 @@ client.once(Events.ClientReady, async (c) => {
   try {
     const commands = [
       { name: 'send_leave_panel', description: 'إرسال لوحة طلبات الإجازات والاستقالات' },
-      { name: 'active_leaves', description: 'عرض قائمة الإداريين المجازين' }
+      { name: 'active_leaves', description: 'عرض قائمة الإداريين المجازين' },
+      { name: 'barren', description: 'جرد إحصائيات فريق التفعيل' }
     ];
     await c.application.commands.set(commands, GUILD_ID);
     console.log('✅ تم تسجيل الأوامر.');
@@ -501,7 +532,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 });
 
 // ============================================================
-// معالج التفاعلات (الإجازات + التقييم)
+// معالج التفاعلات (الإجازات + التقييم + barren)
 // ============================================================
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
@@ -796,11 +827,112 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (!desc) desc = '✅ جميع الإجازات انتهت.';
         return interaction.reply({ embeds: [new EmbedBuilder().setTitle('📋 الإجازات النشطة').setColor(0x3ba55d).setDescription(desc)] });
       }
+
+      // ===== الأمر الجديد: barren (جرد فريق التفعيل) =====
+      if (interaction.commandName === 'barren') {
+        if (!hasStaffRole(interaction.member)) {
+          return interaction.reply({ content: '❌ هذا الأمر خاص بالإدارة.', ephemeral: true });
+        }
+
+        await interaction.deferReply();
+
+        const guild = interaction.guild;
+        await guild.members.fetch();
+
+        const targetRoleId = '1486587636863864862'; // Activation Team
+
+        // قنوات الإحصائيات
+        const activateChannel = '1484859915200626829';   // تفعيل شخص
+        const rejectChannel = '1484865429158756494';     // رفض شخص
+        const reactivateChannel = '1493565275428225125'; // إعادة تفعيل شخص
+
+        // جلب الرسائل لآخر 7 أيام
+        const days = 7;
+        const [activateMsgs, rejectMsgs, reactivateMsgs] = await Promise.all([
+          fetchMessages(activateChannel, days),
+          fetchMessages(rejectChannel, days),
+          fetchMessages(reactivateChannel, days)
+        ]);
+
+        // جلب أعضاء الرتبة
+        const members = guild.members.cache.filter(m => m.roles.cache.has(targetRoleId));
+
+        if (members.size === 0) {
+          return interaction.editReply({ content: '❌ لا يوجد أعضاء في فريق التفعيل.' });
+        }
+
+        // حساب الإحصائيات لكل عضو
+        const stats = [];
+        for (const [id, member] of members) {
+          // تفعيل: رسائل تحتوي على منشن العضو (مع تجاهل الكلمات لأنها مخصصة)
+          const activates = activateMsgs.filter(msg => msg.content.includes(`<@${id}>`)).length;
+          const rejects = rejectMsgs.filter(msg => msg.content.includes(`<@${id}>`)).length;
+          const reactivates = reactivateMsgs.filter(msg => msg.content.includes(`<@${id}>`)).length;
+
+          stats.push({
+            member,
+            activates,
+            rejects,
+            reactivates
+          });
+        }
+
+        // ترتيب حسب عدد التفعيلات تنازلياً
+        stats.sort((a, b) => b.activates - a.activates);
+
+        // بناء الإمبـد
+        const embed = new EmbedBuilder()
+          .setTitle('📊 جرد فريق التفعيل')
+          .setColor(0x5865f2)
+          .setDescription(`**الفترة:** آخر ${days} يوم (من ${new Date(Date.now() - days*24*60*60*1000).toLocaleDateString('ar-SA')} إلى ${new Date().toLocaleDateString('ar-SA')})`)
+          .setThumbnail(`attachment://${SERVER_LOGO_FILENAME}`)
+          .setTimestamp();
+
+        let description = '';
+        for (const stat of stats) {
+          const name = stat.member.displayName || stat.member.user.username;
+          description += `**${name}**\n`;
+          description += `<@&${targetRoleId}>\n`;
+          description += `▪️ **تفعيل شخص:** ${stat.activates}\n`;
+          description += `▪️ **رفض شخص:** ${stat.rejects}\n`;
+          description += `▪️ **إعادة تفعيل شخص:** ${stat.reactivates}\n\n`;
+        }
+
+        // تقسيم النص الطويل إذا تجاوز الحد
+        const MAX_DESC_LENGTH = 4000;
+        if (description.length > MAX_DESC_LENGTH) {
+          const parts = [];
+          let currentPart = '';
+          const lines = description.split('\n');
+          for (const line of lines) {
+            if (currentPart.length + line.length + 1 > MAX_DESC_LENGTH) {
+              parts.push(currentPart);
+              currentPart = '';
+            }
+            currentPart += (currentPart ? '\n' : '') + line;
+          }
+          if (currentPart) parts.push(currentPart);
+
+          const logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
+          const embed1 = EmbedBuilder.from(embed).setDescription(parts[0]);
+          await interaction.editReply({ embeds: [embed1], files: [logoFile] });
+          for (let i = 1; i < parts.length; i++) {
+            const embedPart = EmbedBuilder.from(embed).setDescription(parts[i]);
+            await interaction.followUp({ embeds: [embedPart] });
+          }
+        } else {
+          embed.setDescription(description);
+          const logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
+          await interaction.editReply({ embeds: [embed], files: [logoFile] });
+        }
+      }
     }
   } catch (error) {
     console.error('❌ خطأ في التفاعل:', error);
     if (!interaction.replied && !interaction.deferred) {
       await interaction.reply({ content: '❌ حدث خطأ.', ephemeral: true }).catch(() => null);
+    } else if (interaction.deferred) {
+      await interaction.editReply({ content: '❌ حدث خطأ أثناء تنفيذ الأمر.' }).catch(() => null);
     }
   }
 });
