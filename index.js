@@ -930,8 +930,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const totalCount = stats.length;
         description += `\n**تم جرد ${totalCount} شخص.**`;
 
-        // ===== التعديل الأساسي: زيادة الحد وضمان التقسيم الصحيح =====
-        const MAX_DESC_LENGTH = 5500;
+        // ===== التعديل الأساسي: استخدام 4000 كحد أقصى =====
+        const MAX_DESC_LENGTH = 4000;
         const logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
 
         if (description.length > MAX_DESC_LENGTH) {
@@ -952,11 +952,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
           if (currentPart) parts.push(currentPart);
 
           console.log(`📊 عدد الأجزاء: ${parts.length}`);
+          // حساب عدد الأعضاء في كل جزء بشكل صحيح (باستثناء منشنات الرتب)
           console.log(`📊 عدد الأعضاء في كل جزء:`);
           let totalDisplayed = 0;
           for (let i = 0; i < parts.length; i++) {
-            // حساب عدد الأعضاء في هذا الجزء (بالبحث عن @)
-            const memberCount = (parts[i].match(/<@/g) || []).length;
+            // البحث عن منشنات الأعضاء: <@ رقم > و <@! رقم >
+            const memberMentions = parts[i].match(/<@!?(\d+)>/g);
+            const memberCount = memberMentions ? memberMentions.length : 0;
             totalDisplayed += memberCount;
             console.log(`   الجزء ${i+1}: ${memberCount} عضو`);
           }
