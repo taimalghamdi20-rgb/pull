@@ -126,8 +126,15 @@ const RATING_CHANNEL_ID = '1531018869764788446';
 // ===== روم الـ Done الصوتي =====
 const DONE_VOICE_CHANNEL_ID = '1499086608010449089';
 
+// ===== رتبة استخدام أمر barren =====
+const BARREN_ROLE_ID = '1486588170282733700';
+
 function hasStaffRole(member) {
   return STAFF_ROLE_IDS.some((roleId) => member.roles.cache.has(roleId));
+}
+
+function hasBarrenRole(member) {
+  return member.roles.cache.has(BARREN_ROLE_ID);
 }
 
 // ===== دوال قاعدة البيانات =====
@@ -828,10 +835,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [new EmbedBuilder().setTitle('📋 الإجازات النشطة').setColor(0x3ba55d).setDescription(desc)] });
       }
 
-      // ===== الأمر الجديد: barren (جرد فريق التفعيل) =====
+      // ===== أمر barren (متاح فقط لرتبة BARREN_ROLE_ID) =====
       if (interaction.commandName === 'barren') {
-        if (!hasStaffRole(interaction.member)) {
-          return interaction.reply({ content: '❌ هذا الأمر خاص بالإدارة.', ephemeral: true });
+        // التحقق من الرتبة المخصصة
+        if (!hasBarrenRole(interaction.member)) {
+          return interaction.reply({ 
+            content: '❌ هذا الأمر مخصص لأعضاء رتبة محددة فقط.', 
+            ephemeral: true 
+          });
         }
 
         await interaction.deferReply();
@@ -864,7 +875,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         // حساب الإحصائيات لكل عضو
         const stats = [];
         for (const [id, member] of members) {
-          // تفعيل: رسائل تحتوي على منشن العضو (مع تجاهل الكلمات لأنها مخصصة)
           const activates = activateMsgs.filter(msg => msg.content.includes(`<@${id}>`)).length;
           const rejects = rejectMsgs.filter(msg => msg.content.includes(`<@${id}>`)).length;
           const reactivates = reactivateMsgs.filter(msg => msg.content.includes(`<@${id}>`)).length;
