@@ -915,7 +915,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         // ترتيب حسب عدد التفعيلات تنازلياً
         stats.sort((a, b) => b.activates - a.activates);
 
-        // بناء الإمبـد
+        // بناء الإمبـد الأساسي
         const embed = new EmbedBuilder()
           .setTitle('📊 جرد فريق التفعيل')
           .setColor(0x5865f2)
@@ -933,10 +933,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         // إضافة عدد الأشخاص المجردين في النهاية
-        description += `\n**تم جرد ${stats.length} شخص.**`;
+        const totalCount = stats.length;
+        description += `\n**تم جرد ${totalCount} شخص.**`;
 
         // تقسيم النص الطويل إذا تجاوز الحد
         const MAX_DESC_LENGTH = 4000;
+        const logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
+
         if (description.length > MAX_DESC_LENGTH) {
           const parts = [];
           let currentPart = '';
@@ -950,16 +953,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }
           if (currentPart) parts.push(currentPart);
 
-          const logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
-          const embed1 = EmbedBuilder.from(embed).setDescription(parts[0]);
-          await interaction.editReply({ embeds: [embed1], files: [logoFile] });
-          for (let i = 1; i < parts.length; i++) {
-            const embedPart = EmbedBuilder.from(embed).setDescription(parts[i]);
-            await interaction.followUp({ embeds: [embedPart] });
+          const totalParts = parts.length;
+          // إرسال كل جزء مع رقمه
+          for (let i = 0; i < parts.length; i++) {
+            const partNumber = i + 1;
+            const embedPart = EmbedBuilder.from(embed)
+              .setDescription(parts[i])
+              .setFooter({ text: `الجزء ${partNumber}/${totalParts} • إجمالي المجردين: ${totalCount}` });
+            if (i === 0) {
+              await interaction.editReply({ embeds: [embedPart], files: [logoFile] });
+            } else {
+              await interaction.followUp({ embeds: [embedPart] });
+            }
           }
         } else {
           embed.setDescription(description);
-          const logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
           await interaction.editReply({ embeds: [embed], files: [logoFile] });
         }
       }
