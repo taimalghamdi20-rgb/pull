@@ -90,7 +90,7 @@ const WAITING_ROOM_ADMIN_MAP = {
 
 // ===== خريطة روم الانتظار -> الرتبة المطلوبة للإداري =====
 const WAITING_ROOM_REQUIRED_ROLE = {
-  '1483285123008041031': '1486587636863864862' // رتبة Activation Team
+  '1483285123008041031': '1486587636863864862'
 };
 
 // ===== إعدادات عامة =====
@@ -104,7 +104,6 @@ const WAITING_NOTIFICATION_CHANNEL_ID = '1530276832203636737';
 const WAITING_MENTION_ROLE_ID = '1499102575918579793';
 const WAITING_TIMEOUT_MS = 3 * 60 * 1000;
 
-// ===== رومات الإدارة العامة (لرومات الانتظار غير المخصصة) =====
 const ADMIN_ROOM_IDS = [
   '1499105265272754246',
   '1499105221383819497',
@@ -120,16 +119,10 @@ const ADMIN_ROOM_IDS = [
   '1519516058682130632',
 ];
 
-// ===== قناة التقييم =====
 const RATING_CHANNEL_ID = '1531018869764788446';
-
-// ===== روم الـ Done الصوتي =====
 const DONE_VOICE_CHANNEL_ID = '1499086608010449089';
-
-// ===== رتبة استخدام أمر barren =====
 const BARREN_ROLE_ID = '1486588170282733700';
 
-// ===== قائمة الرتب الإدارية المسموح بعرضها في الجرد =====
 const ALLOWED_ROLE_IDS = [
   '1499162553245499432',
   '1480102405931667467',
@@ -206,9 +199,9 @@ const client = new Client({
 });
 
 // ===== حالة الجلسات النشطة والكول داون =====
-const activeSessions = new Map(); // citizenId -> { adminId, startTime }
-const cooldownMap = new Map();   // `${adminId}_${citizenId}` -> timestamp (end of cooldown)
-const waitingTimers = new Map(); // لإدارة تنبيه الانتظار
+const activeSessions = new Map();
+const cooldownMap = new Map();
+const waitingTimers = new Map();
 
 // ============================================================
 // دوال التقييم
@@ -867,17 +860,33 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         const guild = interaction.guild;
         
-        // جلب جميع الأعضاء من السيرفر بقوة
-        await guild.members.fetch({ withPresences: false });
+        // ==== الحل النهائي: جلب كل الأعضاء + تحديث الكاش بالقوة ====
+        console.log('🔄 جاري جلب جميع أعضاء السيرفر...');
+        await guild.members.fetch({ withPresences: false, force: true });
+        console.log(`✅ تم جلب ${guild.members.cache.size} عضو.`);
 
-        const targetRoleId = '1486587636863864862'; // Activation Team
+        const targetRoleId = '1486587636863864862';
+
+        // جلب الرتبة للتأكد من وجودها
+        const role = guild.roles.cache.get(targetRoleId);
+        if (!role) {
+          return interaction.editReply({ content: '❌ الرتبة غير موجودة.' });
+        }
+
+        // الآن استخدام filter على الكاش المحدث
+        const members = guild.members.cache.filter(m => m.roles.cache.has(targetRoleId));
+        const memberCount = members.size;
+        console.log(`✅ عدد الأعضاء الذين يمتلكون الرتبة: ${memberCount}`);
+
+        if (memberCount === 0) {
+          return interaction.editReply({ content: '❌ لا يوجد أعضاء في فريق التفعيل.' });
+        }
 
         // قنوات الإحصائيات
-        const activateChannel = '1484859915200626829';   // تفعيل شخص
-        const rejectChannel = '1484865429158756494';     // رفض شخص
-        const reactivateChannel = '1493565275428225125'; // إعادة تفعيل شخص
+        const activateChannel = '1484859915200626829';
+        const rejectChannel = '1484865429158756494';
+        const reactivateChannel = '1493565275428225125';
 
-        // جلب الرسائل لآخر 7 أيام
         const days = 7;
         const [activateMsgs, rejectMsgs, reactivateMsgs] = await Promise.all([
           fetchMessages(activateChannel, days),
@@ -885,41 +894,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
           fetchMessages(reactivateChannel, days)
         ]);
 
-        // ==== التعديل الرئيسي: استخدام role.members مباشرة ====
-        const role = guild.roles.cache.get(targetRoleId);
-        if (!role) {
-          return interaction.editReply({ content: '❌ الرتبة غير موجودة.' });
-        }
-        const members = role.members;
-
-        if (members.size === 0) {
-          return interaction.editReply({ content: '❌ لا يوجد أعضاء في فريق التفعيل.' });
-        }
-
-        // حساب الإحصائيات لكل عضو
+        // حساب الإحصائيات
         const stats = [];
         for (const [id, member] of members) {
           const activates = activateMsgs.filter(msg => msg.content.includes(`<@${id}>`)).length;
           const rejects = rejectMsgs.filter(msg => msg.content.includes(`<@${id}>`)).length;
           const reactivates = reactivateMsgs.filter(msg => msg.content.includes(`<@${id}>`)).length;
 
-          // جلب الرتب التي يملكها العضو من القائمة المسموح بها
           const roles = member.roles.cache.filter(role => ALLOWED_ROLE_IDS.includes(role.id));
           const roleMentions = roles.map(role => `<@&${role.id}>`).join(' ') || 'لا يوجد رتبة';
 
-          stats.push({
-            member,
-            activates,
-            rejects,
-            reactivates,
-            roleMentions
-          });
+          stats.push({ member, activates, rejects, reactivates, roleMentions });
         }
 
-        // ترتيب حسب عدد التفعيلات تنازلياً
         stats.sort((a, b) => b.activates - a.activates);
 
-        // بناء الإمبـد الأساسي
         const embed = new EmbedBuilder()
           .setTitle('📊 جرد فريق التفعيل')
           .setColor(0x5865f2)
@@ -936,11 +925,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
           description += `▪️ **إعادة تفعيل شخص:** ${stat.reactivates}\n\n`;
         }
 
-        // إضافة عدد الأشخاص المجردين في النهاية
         const totalCount = stats.length;
         description += `\n**تم جرد ${totalCount} شخص.**`;
 
-        // تقسيم النص الطويل إذا تجاوز الحد
         const MAX_DESC_LENGTH = 4000;
         const logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
 
@@ -958,7 +945,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           if (currentPart) parts.push(currentPart);
 
           const totalParts = parts.length;
-          // إرسال كل جزء مع رقمه
           for (let i = 0; i < parts.length; i++) {
             const partNumber = i + 1;
             const embedPart = EmbedBuilder.from(embed)
