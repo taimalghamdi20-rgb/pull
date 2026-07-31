@@ -860,64 +860,26 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         const guild = interaction.guild;
         
-        // ===== إضافة الـ console.log =====
         console.log('==================== بدء جرد فريق التفعيل ====================');
-        
-        // جلب جميع الأعضاء بالقوة
         console.log('🔄 جاري جلب جميع أعضاء السيرفر...');
         await guild.members.fetch({ withPresences: false, force: true });
-        console.log(`✅ تم جلب ${guild.members.cache.size} عضو في الكاش.`);
+        console.log(`✅ تم جلب ${guild.members.cache.size} عضو.`);
 
         const targetRoleId = '1486587636863864862';
         console.log(`🎯 الرتبة المستهدفة: ${targetRoleId}`);
 
-        // جلب الرتبة
         const role = guild.roles.cache.get(targetRoleId);
         if (!role) {
-          console.log('❌ الرتبة غير موجودة في الكاش!');
+          console.log('❌ الرتبة غير موجودة!');
           return interaction.editReply({ content: '❌ الرتبة غير موجودة.' });
         }
         console.log(`✅ تم العثور على الرتبة: "${role.name}" (${role.id})`);
 
-        // عدد الأعضاء من role.members (مباشر من الرتبة)
-        console.log(`📊 عدد الأعضاء في role.members: ${role.members.size}`);
-        
-        // عدد الأعضاء من الفلتر
-        const members = guild.members.cache.filter(m => m.roles.cache.has(targetRoleId));
-        console.log(`📊 عدد الأعضاء بعد الفلتر (guild.members.cache.filter): ${members.size}`);
+        // استخدام role.members للحصول على العدد الصحيح
+        const members = role.members;
+        console.log(`📊 عدد الأعضاء في role.members: ${members.size}`);
 
-        // إذا كان العدد مختلف، نعرض بعض الـ IDs للمقارنة
-        if (role.members.size !== members.size) {
-          console.log('⚠️ يوجد اختلاف في الأعداد!');
-          const roleMemberIds = new Set(role.members.map(m => m.id));
-          const filterMemberIds = new Set(members.map(m => m.id));
-          
-          // أعضاء في role.members وليس في الفلتر
-          const missingInFilter = new Set([...roleMemberIds].filter(id => !filterMemberIds.has(id)));
-          if (missingInFilter.size > 0) {
-            console.log(`❌ أعضاء موجودين في role.members لكن مفقودين في الفلتر (${missingInFilter.size}):`);
-            for (const id of missingInFilter) {
-              const member = guild.members.cache.get(id);
-              console.log(`   - ${member ? member.user.tag : id} (ID: ${id})`);
-            }
-          }
-          
-          // أعضاء في الفلتر وليس في role.members
-          const missingInRole = new Set([...filterMemberIds].filter(id => !roleMemberIds.has(id)));
-          if (missingInRole.size > 0) {
-            console.log(`❌ أعضاء موجودين في الفلتر لكن مفقودين في role.members (${missingInRole.size}):`);
-            for (const id of missingInRole) {
-              const member = guild.members.cache.get(id);
-              console.log(`   - ${member ? member.user.tag : id} (ID: ${id})`);
-            }
-          }
-        }
-
-        const memberCount = members.size;
-        console.log(`✅ العدد النهائي للأعضاء الذين سيجردون: ${memberCount}`);
-        console.log('==============================================================\n');
-
-        if (memberCount === 0) {
+        if (members.size === 0) {
           return interaction.editReply({ content: '❌ لا يوجد أعضاء في فريق التفعيل.' });
         }
 
@@ -948,6 +910,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         stats.sort((a, b) => b.activates - a.activates);
 
+        // بناء الإمبـد الأساسي
         const embed = new EmbedBuilder()
           .setTitle('📊 جرد فريق التفعيل')
           .setColor(0x5865f2)
@@ -967,15 +930,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const totalCount = stats.length;
         description += `\n**تم جرد ${totalCount} شخص.**`;
 
-        const MAX_DESC_LENGTH = 4000;
+        // ===== التعديل الأساسي: زيادة الحد وضمان التقسيم الصحيح =====
+        const MAX_DESC_LENGTH = 5500;
         const logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
 
         if (description.length > MAX_DESC_LENGTH) {
+          console.log(`📝 النص طويل (${description.length} حرف)، جاري التقسيم...`);
+          
+          // تقسيم النص إلى أجزاء مع الحفاظ على سلامة الأسطر
           const parts = [];
           let currentPart = '';
           const lines = description.split('\n');
           for (const line of lines) {
-            if (currentPart.length + line.length + 1 > MAX_DESC_LENGTH) {
+            // إذا كان السطر الحالي سيجعل الجزء يتجاوز الحد، نبدأ جزءاً جديداً
+            if ((currentPart + line + '\n').length > MAX_DESC_LENGTH) {
               parts.push(currentPart);
               currentPart = '';
             }
@@ -983,22 +951,42 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }
           if (currentPart) parts.push(currentPart);
 
+          console.log(`📊 عدد الأجزاء: ${parts.length}`);
+          console.log(`📊 عدد الأعضاء في كل جزء:`);
+          let totalDisplayed = 0;
+          for (let i = 0; i < parts.length; i++) {
+            // حساب عدد الأعضاء في هذا الجزء (بالبحث عن @)
+            const memberCount = (parts[i].match(/<@/g) || []).length;
+            totalDisplayed += memberCount;
+            console.log(`   الجزء ${i+1}: ${memberCount} عضو`);
+          }
+          console.log(`📊 إجمالي الأعضاء المعروضين: ${totalDisplayed}`);
+
           const totalParts = parts.length;
+          // إرسال كل جزء مع رقمه
           for (let i = 0; i < parts.length; i++) {
             const partNumber = i + 1;
             const embedPart = EmbedBuilder.from(embed)
               .setDescription(parts[i])
               .setFooter({ text: `الجزء ${partNumber}/${totalParts} • إجمالي المجردين: ${totalCount}` });
+            
             if (i === 0) {
               await interaction.editReply({ embeds: [embedPart], files: [logoFile] });
+              console.log(`✅ تم إرسال الجزء ${partNumber}`);
             } else {
               await interaction.followUp({ embeds: [embedPart] });
+              console.log(`✅ تم إرسال الجزء ${partNumber}`);
             }
           }
+          console.log('✅ تم إرسال جميع الأجزاء بنجاح.');
         } else {
           embed.setDescription(description);
           await interaction.editReply({ embeds: [embed], files: [logoFile] });
+          console.log('✅ تم إرسال الإمبـد كاملاً.');
         }
+
+        console.log(`✅ اكتمل الجرد: ${totalCount} شخص.`);
+        console.log('==============================================================\n');
       }
     }
   } catch (error) {
