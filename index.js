@@ -123,6 +123,10 @@ const RATING_CHANNEL_ID = '1531018869764788446';
 const DONE_VOICE_CHANNEL_ID = '1499086608010449089';
 const BARREN_ROLE_ID = '1486588170282733700';
 
+// ===== قناة الترقيات (لاستخراج تاريخ آخر ترقية لكل إداري) =====
+const PROMOTION_CHANNEL_ID = '1459305425857155308';
+
+// ===== قائمة الرتب الإدارية المسموح بعرضها في الجرد =====
 const ALLOWED_ROLE_IDS = [
   '1499162553245499432',
   '1480102405931667467',
@@ -224,23 +228,22 @@ function ratingLabel(rating) {
 }
 
 // ============================================================
-// دوال جلب الإحصائيات (لأمر barren)
+// دوال جلب الإحصائيات (لأمر barren) - مع دعم تاريخ الترقية
 // ============================================================
-async function fetchMessages(channelId, days) {
+async function fetchMessagesFromDate(channelId, fromDate) {
   try {
     const channel = client.channels.cache.get(channelId);
     if (!channel) return [];
     const limit = 1000;
     const messages = [];
     let lastId = null;
-    const until = Date.now() - days * 24 * 60 * 60 * 1000;
     let fetched = 0;
     while (fetched < limit) {
       const options = { limit: 100 };
       if (lastId) options.before = lastId;
       const msgs = await channel.messages.fetch(options);
       if (msgs.size === 0) break;
-      const filtered = msgs.filter(m => m.createdTimestamp >= until);
+      const filtered = msgs.filter(m => m.createdTimestamp >= fromDate);
       messages.push(...filtered.values());
       lastId = msgs.last().id;
       fetched += msgs.size;
@@ -251,6 +254,43 @@ async function fetchMessages(channelId, days) {
     console.error(`❌ فشل جلب رسائل القناة ${channelId}:`, err);
     return [];
   }
+}
+
+// دالة لاستخراج آخر تاريخ ترقية لكل إداري من قناة الترقيات
+async function getLastPromotionDate(guild) {
+  const promotionChannel = client.channels.cache.get(PROMOTION_CHANNEL_ID);
+  if (!promotionChannel) {
+    console.error('❌ قناة الترقيات غير موجودة!');
+    return new Map();
+  }
+
+  const lastPromotionMap = new Map();
+  let lastId = null;
+  let fetched = 0;
+  const limit = 1000;
+  // نبحث في آخر 1000 رسالة (عادةً تكفي لآخر شهرين من الترقيات)
+  while (fetched < limit) {
+    const options = { limit: 100 };
+    if (lastId) options.before = lastId;
+    const msgs = await promotionChannel.messages.fetch(options);
+    if (msgs.size === 0) break;
+    for (const [, msg] of msgs) {
+      // نبحث عن منشن عضو في الرسالة
+      const match = msg.content.match(/<@!?(\d+)>/);
+      if (match) {
+        const userId = match[1];
+        // إذا لم يكن لدينا تاريخ لهذا المستخدم من قبل، نخزن التاريخ (أحدث ترقية تكون أول ظهور)
+        if (!lastPromotionMap.has(userId)) {
+          lastPromotionMap.set(userId, msg.createdTimestamp);
+        }
+      }
+    }
+    lastId = msgs.last().id;
+    fetched += msgs.size;
+    if (msgs.size < 100) break; // إذا وصلنا لنهاية القناة
+  }
+
+  return lastPromotionMap;
 }
 
 // ============================================================
@@ -883,67 +923,93 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.editReply({ content: '❌ لا يوجد أعضاء في فريق التفعيل.' });
         }
 
+        // جلب آخر تاريخ ترقية لكل إداري
+        console.log('🔄 جاري جلب تواريخ آخر ترقية لكل إداري من قناة الترقيات...');
+        const lastPromotionMap = await getLastPromotionDate(guild);
+        console.log(`✅ تم جلب تواريخ الترقية لـ ${lastPromotionMap.size} إداري.`);
+
         // قنوات الإحصائيات
         const activateChannel = '1484859915200626829';
         const rejectChannel = '1484865429158756494';
         const reactivateChannel = '1493565275428225125';
 
-        const days = 7;
+        // جلب الرسائل من القنوات - سنقوم بجلبها لكل إداري حسب تاريخ ترقيته
+        // ولكن لتحسين الأداء، نجلب جميع الرسائل من القنوات (آخر 30 يوم) ثم نفلتر حسب التاريخ لكل إداري
+        const days = 30; // نأخذ 30 يوم للاحتياط
         const [activateMsgs, rejectMsgs, reactivateMsgs] = await Promise.all([
-          fetchMessages(activateChannel, days),
-          fetchMessages(rejectChannel, days),
-          fetchMessages(reactivateChannel, days)
+          fetchMessagesFromDate(activateChannel, Date.now() - days * 24 * 60 * 60 * 1000),
+          fetchMessagesFromDate(rejectChannel, Date.now() - days * 24 * 60 * 60 * 1000),
+          fetchMessagesFromDate(reactivateChannel, Date.now() - days * 24 * 60 * 60 * 1000)
         ]);
 
-        // حساب الإحصائيات
+        console.log(`📊 عدد رسائل التفعيل: ${activateMsgs.length}`);
+        console.log(`📊 عدد رسائل الرفض: ${rejectMsgs.length}`);
+        console.log(`📊 عدد رسائل إعادة التفعيل: ${reactivateMsgs.length}`);
+
+        // حساب الإحصائيات لكل عضو بناءً على تاريخ ترقيته
         const stats = [];
         for (const [id, member] of members) {
-          const activates = activateMsgs.filter(msg => msg.content.includes(`<@${id}>`)).length;
-          const rejects = rejectMsgs.filter(msg => msg.content.includes(`<@${id}>`)).length;
-          const reactivates = reactivateMsgs.filter(msg => msg.content.includes(`<@${id}>`)).length;
+          // الحصول على تاريخ آخر ترقية لهذا العضو
+          const promotionDate = lastPromotionMap.get(id) || Date.now() - 7 * 24 * 60 * 60 * 1000; // إذا لم يوجد، نأخذ آخر 7 أيام
+          console.log(`   ⏰ ${member.user.tag} آخر ترقية: ${new Date(promotionDate).toLocaleDateString('ar-SA')}`);
+
+          // تصفية الرسائل التي تمت بعد تاريخ الترقية
+          const activates = activateMsgs.filter(msg => 
+            msg.createdTimestamp >= promotionDate && msg.content.includes(`<@${id}>`)
+          ).length;
+          const rejects = rejectMsgs.filter(msg => 
+            msg.createdTimestamp >= promotionDate && msg.content.includes(`<@${id}>`)
+          ).length;
+          const reactivates = reactivateMsgs.filter(msg => 
+            msg.createdTimestamp >= promotionDate && msg.content.includes(`<@${id}>`)
+          ).length;
 
           const roles = member.roles.cache.filter(role => ALLOWED_ROLE_IDS.includes(role.id));
           const roleMentions = roles.map(role => `<@&${role.id}>`).join(' ') || 'لا يوجد رتبة';
 
-          stats.push({ member, activates, rejects, reactivates, roleMentions });
+          stats.push({ 
+            member, 
+            activates, 
+            rejects, 
+            reactivates, 
+            roleMentions,
+            promotionDate 
+          });
         }
 
         stats.sort((a, b) => b.activates - a.activates);
 
-        // بناء النص الأساسي (بدون الرأس والتذييل)
+        // بناء النص الأساسي
         let bodyText = '';
         for (const stat of stats) {
+          const promotionDateStr = new Date(stat.promotionDate).toLocaleDateString('ar-SA');
           bodyText += `<@${stat.member.id}>\n`;
           bodyText += `**الرتب:** ${stat.roleMentions}\n`;
           bodyText += `▪️ **تفعيل شخص:** ${stat.activates}\n`;
           bodyText += `▪️ **رفض شخص:** ${stat.rejects}\n`;
-          bodyText += `▪️ **إعادة تفعيل شخص:** ${stat.reactivates}\n\n`;
+          bodyText += `▪️ **إعادة تفعيل شخص:** ${stat.reactivates}\n`;
+          bodyText += `▪️ **آخر ترقية:** ${promotionDateStr}\n\n`;
         }
 
         const totalCount = stats.length;
 
-        // إنشاء الرأس والتذييل
-        const header = `📊 جرد فريق التفعيل\n**الفترة:** آخر ${days} يوم (من ${new Date(Date.now() - days*24*60*60*1000).toLocaleDateString('ar-SA')} إلى ${new Date().toLocaleDateString('ar-SA')})\n\n`;
+        const header = `📊 جرد فريق التفعيل (منذ آخر ترقية لكل عضو)\n\n`;
         const footer = `\n**تم جرد ${totalCount} شخص.**`;
 
-        // دالة لتقسيم النص مع مراعاة الرأس والتذييل
+        // تقسيم النص
         const MAX_MSG_LENGTH = 2000;
         const fullText = header + bodyText + footer;
 
         if (fullText.length <= MAX_MSG_LENGTH) {
-          // النص كامل لا يحتاج تقسيم
           const logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
           await interaction.editReply({ content: fullText, files: [logoFile] });
           console.log('✅ تم إرسال النص كاملاً.');
         } else {
-          // نقسم bodyText إلى أجزاء
           const parts = [];
           let currentPart = '';
           const lines = bodyText.split('\n');
           for (const line of lines) {
-            // نحاول إضافة السطر مع مراعاة الرأس والتذييل
             const testPart = currentPart + line + '\n';
-            // نضيف الرأس والتذييل بشكل مؤقت للاختبار
             const testFull = header + testPart + footer;
             if (testFull.length > MAX_MSG_LENGTH && currentPart.length > 0) {
               parts.push(currentPart);
@@ -960,25 +1026,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
           for (let i = 0; i < parts.length; i++) {
             let content;
-            if (i === 0 && parts.length === 1) {
-              // حالة نادرة: جزء واحد فقط (لا يحدث هنا لأننا في else)
-              content = header + parts[i] + footer;
-            } else if (i === 0) {
-              // الجزء الأول: نضيف الرأس ولكن بدون تذييل (نضيفه في الأخير)
+            if (i === 0) {
               content = header + parts[i];
             } else if (i === parts.length - 1) {
-              // الجزء الأخير: نضيف التذييل
               content = parts[i] + footer;
             } else {
-              // الأجزاء الوسطى: فقط المحتوى
               content = parts[i];
             }
 
-            // نتأكد من عدم تجاوز الحد (قد يحدث خطأ بسيط)
             if (content.length > MAX_MSG_LENGTH) {
-              // إذا تجاوز، نقسم أكثر (حالة نادرة)
-              console.warn(`⚠️ الجزء ${i+1} تجاوز الحد (${content.length})، يتم تقسيمه إضافياً.`);
-              // نقسم content إلى أجزاء أصغر (حسب الحاجة)
+              // تقسيم إضافي إذا لزم الأمر
               const subParts = [];
               let sub = '';
               const subLines = content.split('\n');
@@ -993,7 +1050,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
               for (let j = 0; j < subParts.length; j++) {
                 const subContent = (i === 0 && j === 0) ? header + subParts[j] : subParts[j];
                 if (i === parts.length - 1 && j === subParts.length - 1) {
-                  // أضف التذييل للجزء الفرعي الأخير
                   const finalContent = subContent + footer;
                   if (j === 0 && i === 0) {
                     await interaction.editReply({ content: finalContent, files: [logoFile] });
