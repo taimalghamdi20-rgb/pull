@@ -885,8 +885,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
           fetchMessages(reactivateChannel, days)
         ]);
 
-        // الحصول على الأعضاء الذين يمتلكون الرتبة
-        const members = guild.members.cache.filter(m => m.roles.cache.has(targetRoleId));
+        // ==== التعديل الرئيسي: استخدام role.members مباشرة ====
+        const role = guild.roles.cache.get(targetRoleId);
+        if (!role) {
+          return interaction.editReply({ content: '❌ الرتبة غير موجودة.' });
+        }
+        const members = role.members;
 
         if (members.size === 0) {
           return interaction.editReply({ content: '❌ لا يوجد أعضاء في فريق التفعيل.' });
