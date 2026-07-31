@@ -129,6 +129,25 @@ const DONE_VOICE_CHANNEL_ID = '1499086608010449089';
 // ===== رتبة استخدام أمر barren =====
 const BARREN_ROLE_ID = '1486588170282733700';
 
+// ===== قائمة الرتب الإدارية المسموح بعرضها في الجرد =====
+const ALLOWED_ROLE_IDS = [
+  '1499162553245499432',
+  '1480102405931667467',
+  '1472332996269838490',
+  '1472333499221544981',
+  '1472333861965791374',
+  '1472342890058354801',
+  '1480102742851850302',
+  '1472353378695778537',
+  '1459304443844497633',
+  '1472352421153083563',
+  '1459304436491882742',
+  '1459304556164026388',
+  '1459304391248052400',
+  '1472353789246836887',
+  '1480279990422601859'
+];
+
 function hasStaffRole(member) {
   return STAFF_ROLE_IDS.some((roleId) => member.roles.cache.has(roleId));
 }
@@ -879,11 +898,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const rejects = rejectMsgs.filter(msg => msg.content.includes(`<@${id}>`)).length;
           const reactivates = reactivateMsgs.filter(msg => msg.content.includes(`<@${id}>`)).length;
 
+          // جلب الرتب التي يملكها العضو من القائمة المسموح بها
+          const roles = member.roles.cache.filter(role => ALLOWED_ROLE_IDS.includes(role.id));
+          const roleMentions = roles.map(role => `<@&${role.id}>`).join(' ') || 'لا يوجد رتبة';
+
           stats.push({
             member,
             activates,
             rejects,
-            reactivates
+            reactivates,
+            roleMentions
           });
         }
 
@@ -900,9 +924,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         let description = '';
         for (const stat of stats) {
-          const name = stat.member.displayName || stat.member.user.username;
-          description += `**${name}**\n`;
-          description += `<@&${targetRoleId}>\n`;
+          description += `<@${stat.member.id}>\n`;
+          description += `**الرتب:** ${stat.roleMentions}\n`;
           description += `▪️ **تفعيل شخص:** ${stat.activates}\n`;
           description += `▪️ **رفض شخص:** ${stat.rejects}\n`;
           description += `▪️ **إعادة تفعيل شخص:** ${stat.reactivates}\n\n`;
