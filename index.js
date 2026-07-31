@@ -910,35 +910,42 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         stats.sort((a, b) => b.activates - a.activates);
 
-        // بناء النص
-        let text = `📊 جرد فريق التفعيل\n`;
-        text += `**الفترة:** آخر ${days} يوم (من ${new Date(Date.now() - days*24*60*60*1000).toLocaleDateString('ar-SA')} إلى ${new Date().toLocaleDateString('ar-SA')})\n\n`;
-        
+        // بناء النص الأساسي (بدون الرأس والتذييل)
+        let bodyText = '';
         for (const stat of stats) {
-          text += `<@${stat.member.id}>\n`;
-          text += `**الرتب:** ${stat.roleMentions}\n`;
-          text += `▪️ **تفعيل شخص:** ${stat.activates}\n`;
-          text += `▪️ **رفض شخص:** ${stat.rejects}\n`;
-          text += `▪️ **إعادة تفعيل شخص:** ${stat.reactivates}\n\n`;
+          bodyText += `<@${stat.member.id}>\n`;
+          bodyText += `**الرتب:** ${stat.roleMentions}\n`;
+          bodyText += `▪️ **تفعيل شخص:** ${stat.activates}\n`;
+          bodyText += `▪️ **رفض شخص:** ${stat.rejects}\n`;
+          bodyText += `▪️ **إعادة تفعيل شخص:** ${stat.reactivates}\n\n`;
         }
 
         const totalCount = stats.length;
-        text += `**تم جرد ${totalCount} شخص.**`;
 
-        // ===== إرسال النص كرسائل عادية =====
+        // إنشاء الرأس والتذييل
+        const header = `📊 جرد فريق التفعيل\n**الفترة:** آخر ${days} يوم (من ${new Date(Date.now() - days*24*60*60*1000).toLocaleDateString('ar-SA')} إلى ${new Date().toLocaleDateString('ar-SA')})\n\n`;
+        const footer = `\n**تم جرد ${totalCount} شخص.**`;
+
+        // دالة لتقسيم النص مع مراعاة الرأس والتذييل
         const MAX_MSG_LENGTH = 2000;
-        const logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
+        const fullText = header + bodyText + footer;
 
-        if (text.length > MAX_MSG_LENGTH) {
-          console.log(`📝 النص طويل (${text.length} حرف)، جاري التقسيم...`);
-          
-          // تقسيم النص إلى أجزاء مع الحفاظ على سلامة الأسطر
+        if (fullText.length <= MAX_MSG_LENGTH) {
+          // النص كامل لا يحتاج تقسيم
+          const logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
+          await interaction.editReply({ content: fullText, files: [logoFile] });
+          console.log('✅ تم إرسال النص كاملاً.');
+        } else {
+          // نقسم bodyText إلى أجزاء
           const parts = [];
           let currentPart = '';
-          const lines = text.split('\n');
+          const lines = bodyText.split('\n');
           for (const line of lines) {
-            // إذا كان السطر الحالي سيجعل الجزء يتجاوز الحد، نبدأ جزءاً جديداً
-            if ((currentPart + line + '\n').length > MAX_MSG_LENGTH) {
+            // نحاول إضافة السطر مع مراعاة الرأس والتذييل
+            const testPart = currentPart + line + '\n';
+            // نضيف الرأس والتذييل بشكل مؤقت للاختبار
+            const testFull = header + testPart + footer;
+            if (testFull.length > MAX_MSG_LENGTH && currentPart.length > 0) {
               parts.push(currentPart);
               currentPart = '';
             }
@@ -947,37 +954,71 @@ client.on(Events.InteractionCreate, async (interaction) => {
           if (currentPart) parts.push(currentPart);
 
           console.log(`📊 عدد الأجزاء: ${parts.length}`);
-          // حساب عدد الأعضاء في كل جزء
-          let totalDisplayed = 0;
-          for (let i = 0; i < parts.length; i++) {
-            const memberMentions = parts[i].match(/<@!?(\d+)>/g);
-            const memberCount = memberMentions ? memberMentions.length : 0;
-            totalDisplayed += memberCount;
-            console.log(`   الجزء ${i+1}: ${memberCount} عضو`);
-          }
-          console.log(`📊 إجمالي الأعضاء المعروضين: ${totalDisplayed}`);
 
           const totalParts = parts.length;
-          // إرسال كل جزء مع تذييل
+          const logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
+
           for (let i = 0; i < parts.length; i++) {
-            const partNumber = i + 1;
-            const header = `📊 جرد فريق التفعيل (الجزء ${partNumber}/${totalParts})\n`;
-            const footer = `\n**تم جرد ${totalCount} شخص.**`;
-            const content = header + parts[i] + footer;
-            
+            let content;
+            if (i === 0 && parts.length === 1) {
+              // حالة نادرة: جزء واحد فقط (لا يحدث هنا لأننا في else)
+              content = header + parts[i] + footer;
+            } else if (i === 0) {
+              // الجزء الأول: نضيف الرأس ولكن بدون تذييل (نضيفه في الأخير)
+              content = header + parts[i];
+            } else if (i === parts.length - 1) {
+              // الجزء الأخير: نضيف التذييل
+              content = parts[i] + footer;
+            } else {
+              // الأجزاء الوسطى: فقط المحتوى
+              content = parts[i];
+            }
+
+            // نتأكد من عدم تجاوز الحد (قد يحدث خطأ بسيط)
+            if (content.length > MAX_MSG_LENGTH) {
+              // إذا تجاوز، نقسم أكثر (حالة نادرة)
+              console.warn(`⚠️ الجزء ${i+1} تجاوز الحد (${content.length})، يتم تقسيمه إضافياً.`);
+              // نقسم content إلى أجزاء أصغر (حسب الحاجة)
+              const subParts = [];
+              let sub = '';
+              const subLines = content.split('\n');
+              for (const sl of subLines) {
+                if ((sub + sl + '\n').length > MAX_MSG_LENGTH) {
+                  subParts.push(sub);
+                  sub = '';
+                }
+                sub += (sub ? '\n' : '') + sl;
+              }
+              if (sub) subParts.push(sub);
+              for (let j = 0; j < subParts.length; j++) {
+                const subContent = (i === 0 && j === 0) ? header + subParts[j] : subParts[j];
+                if (i === parts.length - 1 && j === subParts.length - 1) {
+                  // أضف التذييل للجزء الفرعي الأخير
+                  const finalContent = subContent + footer;
+                  if (j === 0 && i === 0) {
+                    await interaction.editReply({ content: finalContent, files: [logoFile] });
+                  } else {
+                    await interaction.followUp({ content: finalContent });
+                  }
+                } else {
+                  if (j === 0 && i === 0) {
+                    await interaction.editReply({ content: subContent, files: [logoFile] });
+                  } else {
+                    await interaction.followUp({ content: subContent });
+                  }
+                }
+              }
+              continue;
+            }
+
             if (i === 0) {
               await interaction.editReply({ content: content, files: [logoFile] });
-              console.log(`✅ تم إرسال الجزء ${partNumber}`);
             } else {
               await interaction.followUp({ content: content });
-              console.log(`✅ تم إرسال الجزء ${partNumber}`);
             }
+            console.log(`✅ تم إرسال الجزء ${i+1}`);
           }
           console.log('✅ تم إرسال جميع الأجزاء بنجاح.');
-        } else {
-          // إرسال النص كاملاً
-          await interaction.editReply({ content: text, files: [logoFile] });
-          console.log('✅ تم إرسال النص كاملاً.');
         }
 
         console.log(`✅ اكتمل الجرد: ${totalCount} شخص.`);
