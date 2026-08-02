@@ -1,5 +1,17 @@
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
+
+// ===== سيرفر HTTP وهمي لإبقاء Render راضي على أنها Web Service شغالة =====
+// Render يفحص عن بورت مفتوح، وبوت الديسكورد أصلاً ما يحتاج بورت،
+// فهذا السيرفر البسيط يفتح فقط عشان يمر فحص Render (Port Scan) بدون أي وظيفة فعلية.
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end('✅ البوت شغال.');
+}).listen(PORT, () => {
+  console.log(`🌐 سيرفر HTTP الوهمي شغال على بورت ${PORT}`);
+});
 const {
   Client,
   GatewayIntentBits,
