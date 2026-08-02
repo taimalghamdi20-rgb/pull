@@ -1,4 +1,3 @@
-require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const {
@@ -92,6 +91,25 @@ const WAITING_ROOM_ADMIN_MAP = {
 const WAITING_ROOM_REQUIRED_ROLE = {
   '1483285123008041031': '1486587636863864862'
 };
+
+// ===== حالة خاصة: رتبة معينة داخل روم انتظار معين =====
+// أي عضو يدخل SPECIAL_WAITING_ROOM_ID ومعه SPECIAL_ROLE_ID
+// يُسحب فقط لرومات SPECIAL_ADMIN_ROOM_IDS، ويشترط بالإداري رتبة SPECIAL_REQUIRED_ADMIN_ROLE_ID
+const SPECIAL_ROLE_ID = '1476796533168017428';
+const SPECIAL_WAITING_ROOM_ID = '1519511668823167116';
+const SPECIAL_ADMIN_ROOM_IDS = [
+  '1499105265272754246',
+  '1499105221383819497',
+  '1499105170716491806',
+  '1525972362246226041',
+  '1499105092933128212',
+  '1499084679083720805',
+  '1499352796435058848',
+  '1499352980120403989',
+  '1499353050907938916',
+  '1533115980241305860'
+];
+const SPECIAL_REQUIRED_ADMIN_ROLE_ID = '1499102575918579793';
 
 // ===== إعدادات عامة =====
 const LEAVE_EMBED_CHANNEL_ID = '1529495796247167178';
@@ -372,13 +390,23 @@ async function tryPullForAllFreeAdmins(guild) {
   const { member: candidate, waitingChannelId } = waitingData;
 
   let targetAdminRoomIds;
-  if (WAITING_ROOM_ADMIN_MAP[waitingChannelId]) {
+  let requiredRoleId;
+
+  // ===== الحالة الخاصة: روم انتظار معين + رتبة معينة عند المواطن =====
+  const isSpecialCase =
+    waitingChannelId === SPECIAL_WAITING_ROOM_ID &&
+    candidate.roles.cache.has(SPECIAL_ROLE_ID);
+
+  if (isSpecialCase) {
+    targetAdminRoomIds = SPECIAL_ADMIN_ROOM_IDS;
+    requiredRoleId = SPECIAL_REQUIRED_ADMIN_ROLE_ID;
+  } else if (WAITING_ROOM_ADMIN_MAP[waitingChannelId]) {
     targetAdminRoomIds = WAITING_ROOM_ADMIN_MAP[waitingChannelId];
+    requiredRoleId = WAITING_ROOM_REQUIRED_ROLE[waitingChannelId] || ADMIN_ROLE_ID;
   } else {
     targetAdminRoomIds = ADMIN_ROOM_IDS;
+    requiredRoleId = ADMIN_ROLE_ID;
   }
-
-  const requiredRoleId = WAITING_ROOM_REQUIRED_ROLE[waitingChannelId] || ADMIN_ROLE_ID;
 
   const freeAdmins = [];
   for (const roomId of targetAdminRoomIds) {
