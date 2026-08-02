@@ -12,6 +12,15 @@ http.createServer((req, res) => {
 }).listen(PORT, () => {
   console.log(`🌐 سيرفر HTTP الوهمي شغال على بورت ${PORT}`);
 });
+
+// ===== حماية عامة من الأخطاء غير الملتقطة (تمنع تعليق/طيحان البوت المفاجئ) =====
+process.on('unhandledRejection', (reason) => {
+  console.error('⚠️ Unhandled Rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('⚠️ Uncaught Exception:', err);
+});
+
 const {
   Client,
   GatewayIntentBits,
@@ -589,18 +598,22 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
       if (oldEntry) clearTimeout(oldEntry.timeout);
 
       const timer = setTimeout(async () => {
-        const currentMember = await guild.members.fetch(userId).catch(() => null);
-        if (!currentMember) return;
-        const voiceChannel = currentMember.voice.channel;
-        if (!voiceChannel || !WAITING_CHANNEL_IDS.includes(voiceChannel.id)) return;
-        if (hasStaffRole(currentMember)) return;
+        try {
+          const currentMember = await guild.members.fetch(userId).catch(() => null);
+          if (!currentMember) return;
+          const voiceChannel = currentMember.voice.channel;
+          if (!voiceChannel || !WAITING_CHANNEL_IDS.includes(voiceChannel.id)) return;
+          if (hasStaffRole(currentMember)) return;
 
-        const channel = guild.channels.cache.get(WAITING_NOTIFICATION_CHANNEL_ID);
-        if (channel) {
-          await channel.send(`<@&${WAITING_MENTION_ROLE_ID}> يوجد شخص في الانتظار، يرجى التوجه لخدمته.`);
+          const channel = guild.channels.cache.get(WAITING_NOTIFICATION_CHANNEL_ID);
+          if (channel) {
+            await channel.send(`<@&${WAITING_MENTION_ROLE_ID}> يوجد شخص في الانتظار، يرجى التوجه لخدمته.`);
+          }
+          const entry = waitingTimers.get(userId);
+          if (entry) entry.sent = true;
+        } catch (err) {
+          console.error('❌ خطأ في تنبيه الانتظار:', err);
         }
-        const entry = waitingTimers.get(userId);
-        if (entry) entry.sent = true;
       }, WAITING_TIMEOUT_MS);
 
       waitingTimers.set(userId, { timeout: timer, channelId: newState.channelId, sent: false });
@@ -619,7 +632,11 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   if (enteredWaitingOriginal) {
     const member = await guild.members.fetch(userId).catch(() => null);
     if (member && !hasStaffRole(member)) {
-      await tryPullForAllFreeAdmins(guild);
+      try {
+        await tryPullForAllFreeAdmins(guild);
+      } catch (err) {
+        console.error('❌ خطأ في السحب (enteredWaiting):', err);
+      }
     }
   }
 
