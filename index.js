@@ -139,6 +139,9 @@ const LEAVE_ROLE_ID = '1459304469127758027';
 const RESIGNATION_KEEP_ROLE_ID = '1476796533168017428';
 const STAFF_ROLE_IDS = ['1459304407899443396', '1459304410923532481'];
 
+// ===== الرتب اللي تُمنشن مع كل طلب إجازة/استقالة/كسر إجازة يوصل لروم المراجعة =====
+const LEAVE_REQUEST_MENTION_ROLE_IDS = ['1459304407899443396', '1459304410923532481'];
+
 const WAITING_NOTIFICATION_CHANNEL_ID = '1530276832203636737';
 const WAITING_MENTION_ROLE_ID = '1499102575918579793';
 const WAITING_TIMEOUT_MS = 3 * 60 * 1000;
@@ -850,6 +853,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setDescription(`**من:** <@${interaction.user.id}>`)
         .addFields(fields)
         .setTimestamp();
+      const mentionContent = LEAVE_REQUEST_MENTION_ROLE_IDS.map(id => `<@&${id}>`).join(' ');
+      const mentionAllowed = { roles: LEAVE_REQUEST_MENTION_ROLE_IDS };
 
       if (interaction.customId === 'leave_modal') {
         const duration = parseInt(interaction.fields.getTextInputValue('leave_duration'));
@@ -866,7 +871,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           new ButtonBuilder().setCustomId(`req_accept_leave_${interaction.user.id}`).setLabel('قبول').setStyle(ButtonStyle.Success),
           new ButtonBuilder().setCustomId(`req_reject_leave_${interaction.user.id}`).setLabel('رفض').setStyle(ButtonStyle.Danger)
         );
-        await requestsChannel.send({ embeds: [embed], components: [row] });
+        await requestsChannel.send({ content: mentionContent, embeds: [embed], components: [row], allowedMentions: mentionAllowed });
         return interaction.reply({ content: '✅ تم إرسال طلب الإجازة.', ephemeral: true });
       }
 
@@ -880,7 +885,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           new ButtonBuilder().setCustomId(`req_accept_resign_${interaction.user.id}`).setLabel('قبول').setStyle(ButtonStyle.Success),
           new ButtonBuilder().setCustomId(`req_reject_resign_${interaction.user.id}`).setLabel('رفض').setStyle(ButtonStyle.Danger)
         );
-        await requestsChannel.send({ embeds: [embed], components: [row] });
+        await requestsChannel.send({ content: mentionContent, embeds: [embed], components: [row], allowedMentions: mentionAllowed });
         return interaction.reply({ content: '✅ تم إرسال طلب الاستقالة.', ephemeral: true });
       }
 
@@ -894,7 +899,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           new ButtonBuilder().setCustomId(`req_accept_break_${interaction.user.id}`).setLabel('قبول').setStyle(ButtonStyle.Success),
           new ButtonBuilder().setCustomId(`req_reject_break_${interaction.user.id}`).setLabel('رفض').setStyle(ButtonStyle.Danger)
         );
-        await requestsChannel.send({ embeds: [embed], components: [row] });
+        await requestsChannel.send({ content: mentionContent, embeds: [embed], components: [row], allowedMentions: mentionAllowed });
         return interaction.reply({ content: '✅ تم إرسال طلب كسر الإجازة.', ephemeral: true });
       }
     }
