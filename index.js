@@ -446,9 +446,17 @@ async function tryPullForAllFreeAdmins(guild) {
   if (activeSessions.has(candidate.id)) return;
 
   const eligibleAdmins = freeAdmins.filter(({ adminMember }) => {
-    const key = `${adminMember.id}_${candidate.id}`;
-    const cooldownEnd = cooldownMap.get(key);
-    if (cooldownEnd && cooldownEnd > Date.now()) {
+    // ✅ فحص كول داون 15 ثانية للإداري (لمنع سحب مواطن ثانٍ له مباشرة)
+    const adminCooldownKey = adminMember.id;
+    const adminCooldownEnd = cooldownMap.get(adminCooldownKey);
+    if (adminCooldownEnd && adminCooldownEnd > Date.now()) {
+      return false;
+    }
+
+    // فحص كول داون 60 ثانية للزوج (إداري + مواطن)
+    const pairKey = `${adminMember.id}_${candidate.id}`;
+    const pairCooldownEnd = cooldownMap.get(pairKey);
+    if (pairCooldownEnd && pairCooldownEnd > Date.now()) {
       return false;
     }
     return true;
@@ -471,6 +479,9 @@ async function tryPullForAllFreeAdmins(guild) {
       adminId: adminMember.id,
       startTime: Date.now()
     });
+
+    // ✅ تعيين كول داون 15 ثانية للإداري بعد سحب المواطن له
+    cooldownMap.set(adminMember.id, Date.now() + 15 * 1000);
 
     await sendCitizenNotification(candidate.user, adminMember.user);
 
