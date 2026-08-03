@@ -377,8 +377,8 @@ function isFreeAdminRoom(channel, targetAdminRoomIds, requiredRoleId = null) {
   const adminMember = members[0];
   if (requiredRoleId && !adminMember.roles.cache.has(requiredRoleId)) return false;
   if (!adminMember.roles.cache.has(ADMIN_ROLE_ID)) return false;
-  if (isDeafened(adminMember.voice)) return false;
-  return true;
+  if (isDeafened(adminMember.voice)) return true;
+  return false;
 }
 
 async function sendCitizenNotification(citizenUser, adminUser) {
@@ -540,7 +540,8 @@ client.once(Events.ClientReady, async (c) => {
     const commands = [
       { name: 'send_leave_panel', description: 'إرسال لوحة طلبات الإجازات والاستقالات' },
       { name: 'active_leaves', description: 'عرض قائمة الإداريين المجازين' },
-      { name: 'barren', description: 'جرد إحصائيات فريق التفعيل' }
+      { name: 'barren', description: 'جرد إحصائيات فريق التفعيل' },
+      { name: 'privacy', description: 'عرض سياسة الخصوصية الخاصة بالبوت' } // ✅ تم إضافة الأمر هنا
     ];
     await c.application.commands.set(commands, GUILD_ID);
     console.log('✅ تم تسجيل الأوامر.');
@@ -1141,6 +1142,26 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         console.log(`✅ اكتمل الجرد: ${totalCount} شخص.`);
         console.log('==============================================================\n');
+      }
+
+      // ✅ تم إضافة أمر /privacy هنا!
+      if (interaction.commandName === 'privacy') {
+        const privacyUrl = process.env.PRIVACY_POLICY_URL;
+
+        if (privacyUrl) {
+          const embed = new EmbedBuilder()
+            .setTitle('🔒 سياسة الخصوصية')
+            .setDescription(`يمكنك الاطلاع على سياسة الخصوصية الخاصة بنا من خلال الرابط التالي:\n[اضغط هنا لقراءة السياسة](${privacyUrl})`)
+            .setColor(0x5865f2) // لون أزرق ديسكورد
+            .setTimestamp();
+          
+          return interaction.reply({ embeds: [embed], ephemeral: true });
+        } else {
+          return interaction.reply({ 
+            content: '❌ عذراً، لم يتم تحديد رابط سياسة الخصوصية بعد. يرجى التواصل مع المطور.', 
+            ephemeral: true 
+          });
+        }
       }
     }
   } catch (error) {
