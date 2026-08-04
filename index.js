@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 
-// ===== سيرفر HTTP وهمي لإبقاء Render راضي =====
+// ===== سيرفر HTTP وهمي =====
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -121,7 +121,7 @@ const SPECIAL_ADMIN_ROOM_IDS = [
 const SPECIAL_REQUIRED_ADMIN_ROLE_ID = '1499102575918579793';
 
 const LEAVE_EMBED_CHANNEL_ID = '1529495796247167178';
-const LEAVE_PANEL_CHANNEL_ID = '1529440458030321714';
+const LEAVE_PANEL_CHANNEL_ID = '1529440458030321714'; // القناة التي تحتوي على طلبات الإجازات
 const LEAVE_ROLE_ID = '1459304469127758027';
 const RESIGNATION_KEEP_ROLE_ID = '1476796533168017428';
 const STAFF_ROLE_IDS = ['1459304407899443396', '1459304410923532481'];
@@ -175,6 +175,7 @@ function hasBarrenRole(member) {
   return member.roles.cache.has(BARREN_ROLE_ID);
 }
 
+// ===== دوال قاعدة البيانات =====
 function loadActiveLeaves() {
   const stmt = db.prepare('SELECT user_id, end_date FROM active_leaves');
   const rows = stmt.all();
@@ -885,7 +886,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: `✅ تم إرسال اللوحة إلى <#${LEAVE_EMBED_CHANNEL_ID}>.`, ephemeral: true });
       }
 
-      // ===== الأمر المعدل active_leaves =====
+      // ===== الأمر المعدل active_leaves (يعتمد على رسائل القناة) =====
       if (interaction.commandName === 'active_leaves') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
@@ -893,9 +894,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         await interaction.deferReply({ ephemeral: true });
 
-        const leaveRoleId = LEAVE_ROLE_ID; // 1459304469127758027
-
-        // جلب الأعضاء الذين لديهم الرتبة فقط
+        // 1. جلب جميع الأعضاء الحاصلين على رتبة الإجازة
+        const leaveRoleId = LEAVE_ROLE_ID;
         let membersWithLeave;
         try {
           membersWithLeave = await interaction.guild.members.fetch({ role: leaveRoleId });
@@ -908,20 +908,69 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.editReply({ content: '🌴 لا يوجد أعضاء لديهم رتبة الإجازة حالياً.' });
         }
 
+        // 2. جلب رسائل قناة الطلبات (نأخذ آخر 1000 رسالة)
+        const channel = client.channels.cache.get(LEAVE_PANEL_CHANNEL_ID);
+        if (!channel) {
+          return interaction.editReply({ content: '❌ قناة الطلبات غير موجودة.' });
+        }
+
+        let messages;
+        try {
+          messages = await channel.messages.fetch({ limit: 1000 });
+        } catch (err) {
+          console.error('❌ فشل جلب رسائل القناة:', err);
+          return interaction.editReply({ content: '❌ حدث خطأ أثناء جلب رسائل القناة.' });
+        }
+
+        // 3. بناء خريطة لأحدث طلب إجازة مقبول لكل عضو
+        const acceptedLeaveMap = new Map(); // userId -> { durationDays, acceptedTimestamp }
+
+        for (const [, msg] of messages) {
+          // نبحث عن الرسائل التي تحتوي على Embed واحد على الأقل
+          if (msg.embeds.length === 0) continue;
+          const embed = msg.embeds[0];
+          // نبحث عن عنوان يحتوي "طلب إجازة" وحقل "الحالة" يحتوي "تم القبول"
+          if (!embed.title || !embed.title.includes('طلب إجازة')) continue;
+          const fields = embed.fields || [];
+          const statusField = fields.find(f => f.name.includes('الحالة'));
+          if (!statusField || !statusField.value.includes('تم القبول')) continue;
+
+          // استخراج معرف المستخدم من وصف الـ Embed (صيغة "**من:** <@userId>")
+          const description = embed.description || '';
+          const match = description.match(/<@!?(\d+)>/);
+          if (!match) continue;
+          const userId = match[1];
+
+          // استخراج المدة من حقل "المدة"
+          const durationField = fields.find(f => f.name.includes('المدة'));
+          if (!durationField) continue;
+          const durationMatch = durationField.value.match(/\d+/);
+          if (!durationMatch) continue;
+          const days = parseInt(durationMatch[0]);
+
+          // نتتبع فقط أحدث طلب مقبول (باستخدام تاريخ الرسالة)
+          const existing = acceptedLeaveMap.get(userId);
+          if (!existing || msg.createdTimestamp > existing.acceptedTimestamp) {
+            acceptedLeaveMap.set(userId, {
+              durationDays: days,
+              acceptedTimestamp: msg.createdTimestamp
+            });
+          }
+        }
+
+        // 4. بناء قائمة النتائج
         let desc = '';
         let index = 1;
         let anyActive = false;
 
         for (const [userId, member] of membersWithLeave) {
-          const leaveData = activeLeaves.get(userId);
+          const leaveInfo = acceptedLeaveMap.get(userId);
           let statusText = '';
 
-          if (leaveData) {
-            const remaining = leaveData.endDate - Date.now();
+          if (leaveInfo) {
+            const endDate = leaveInfo.acceptedTimestamp + (leaveInfo.durationDays * 24 * 60 * 60 * 1000);
+            const remaining = endDate - Date.now();
             if (remaining <= 0) {
-              // انتهت الإجازة – نزيلها من القاعدة ولكن نبقي الرتبة
-              activeLeaves.delete(userId);
-              saveActiveLeaves();
               statusText = '✅ انتهت';
             } else {
               const days = Math.floor(remaining / (1000 * 60 * 60 * 24));
@@ -930,7 +979,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
               anyActive = true;
             }
           } else {
-            statusText = '❓ غير مسجل (لا توجد إجازة مسجلة)';
+            statusText = '❓ غير مسجل (لا يوجد طلب إجازة مقبول)';
           }
 
           desc += `**${index}.** <@${userId}> — ${statusText}\n`;
