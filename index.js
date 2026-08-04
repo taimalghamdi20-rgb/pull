@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 
-// ===== سيرفر HTTP وهمي =====
+// ===== سيرفر HTTP وهمي لإبقاء Render راضي =====
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -891,12 +891,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
         }
 
-        // تأكيد استلام التفاعل لتجنب انتهاء صلاحيته
         await interaction.deferReply({ ephemeral: true });
 
         const leaveRoleId = LEAVE_ROLE_ID; // 1459304469127758027
 
-        // جلب الأعضاء الذين لديهم الرتبة مباشرةً من الـ API (محدث دائماً)
+        // جلب الأعضاء الذين لديهم الرتبة فقط
         let membersWithLeave;
         try {
           membersWithLeave = await interaction.guild.members.fetch({ role: leaveRoleId });
@@ -931,13 +930,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
               anyActive = true;
             }
           } else {
-            // لديه الرتبة لكن غير مسجل في قاعدة البيانات
             statusText = '❓ غير مسجل (لا توجد إجازة مسجلة)';
           }
 
-          // إضافة اسم المستخدم مع المعرف
-          const userTag = member.user.tag;
-          desc += `**${index}.** <@${userId}> (${userTag}) — ${statusText}\n`;
+          desc += `**${index}.** <@${userId}> — ${statusText}\n`;
           index++;
         }
 
