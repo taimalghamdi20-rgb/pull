@@ -168,7 +168,7 @@ const BARREN_ROLE_ID = '1486588170282733700';
 // ===== قناة الترقيات (لاستخراج تاريخ آخر ترقية لكل إداري) =====
 const PROMOTION_CHANNEL_ID = '1459305425857155308';
 
-// ===== قائمة الرتب الإدارية المسموح بعرضها في الجرد =====
+// ===== قائمة الرتب الإدارية المسموح بعرضها في الجرد (بالترتيب المطلوب) =====
 const ALLOWED_ROLE_IDS = [
   '1499162553245499432',
   '1480102405931667467',
@@ -180,11 +180,7 @@ const ALLOWED_ROLE_IDS = [
   '1472353378695778537',
   '1459304443844497633',
   '1472352421153083563',
-  '1459304436491882742',
-  '1459304556164026388',
-  '1459304391248052400',
-  '1472353789246836887',
-  '1480279990422601859'
+  '1459304436491882742'
 ];
 
 function hasStaffRole(member) {
@@ -1038,8 +1034,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
             msg.createdTimestamp >= promotionDate && msg.content.includes(`<@${id}>`)
           ).length;
 
-          const roles = member.roles.cache.filter(role => ALLOWED_ROLE_IDS.includes(role.id));
-          const roleMentions = roles.map(role => `<@&${role.id}>`).join(' ') || 'لا يوجد رتبة';
+          // ✅ ترتيب الرتب حسب ترتيب ALLOWED_ROLE_IDS بدلاً من ترتيب عشوائي من روم كاش العضو
+          const roleMentions = ALLOWED_ROLE_IDS
+            .filter(roleId => member.roles.cache.has(roleId))
+            .map(roleId => `<@&${roleId}>`)
+            .join(' ') || 'لا يوجد رتبة';
 
           stats.push({ 
             member, 
