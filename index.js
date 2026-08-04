@@ -940,21 +940,69 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: `✅ تم إرسال اللوحة إلى <#${LEAVE_EMBED_CHANNEL_ID}>.`, ephemeral: true });
       }
 
+      // ===== الأمر المعدل active_leaves =====
       if (interaction.commandName === 'active_leaves') {
-        if (!hasStaffRole(interaction.member)) return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
-        if (activeLeaves.size === 0) return interaction.reply({ content: '🌴 لا يوجد إداري في إجازة.', ephemeral: true });
+        if (!hasStaffRole(interaction.member)) {
+          return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
+        }
+
+        // جلب جميع الأعضاء للتأكد من تحديث الكاش
+        await interaction.guild.members.fetch({ withPresences: false, force: true });
+
+        const leaveRoleId = LEAVE_ROLE_ID; // 1459304469127758027
+        const membersWithLeave = interaction.guild.members.cache.filter(m =>
+          m.roles.cache.has(leaveRoleId)
+        );
+
+        if (membersWithLeave.size === 0) {
+          return interaction.reply({
+            content: '🌴 لا يوجد أعضاء لديهم رتبة الإجازة حالياً.',
+            ephemeral: true
+          });
+        }
+
         let desc = '';
         let index = 1;
-        for (const [userId, data] of activeLeaves) {
-          const remaining = data.endDate - Date.now();
-          if (remaining <= 0) { activeLeaves.delete(userId); saveActiveLeaves(); continue; }
-          const days = Math.floor(remaining / (1000*60*60*24));
-          const hours = Math.floor((remaining % (1000*60*60*24)) / (1000*60*60));
-          desc += `**${index}.** <@${userId}> — متبقي: \`${days} يوم و ${hours} ساعة\`\n`;
+        let anyActive = false;
+
+        for (const [userId, member] of membersWithLeave) {
+          const leaveData = activeLeaves.get(userId);
+          let statusText = '';
+
+          if (leaveData) {
+            const remaining = leaveData.endDate - Date.now();
+            if (remaining <= 0) {
+              // انتهت الإجازة – نزيلها من القاعدة ولكن نبقي الرتبة
+              activeLeaves.delete(userId);
+              saveActiveLeaves();
+              statusText = '✅ انتهت';
+            } else {
+              const days = Math.floor(remaining / (1000 * 60 * 60 * 24));
+              const hours = Math.floor((remaining % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+              statusText = `⏳ متبقي: \`${days} يوم و ${hours} ساعة\``;
+              anyActive = true;
+            }
+          } else {
+            // لديه الرتبة لكن غير مسجل في قاعدة البيانات
+            statusText = '❓ غير مسجل (لا توجد إجازة مسجلة)';
+          }
+
+          desc += `**${index}.** <@${userId}> — ${statusText}\n`;
           index++;
         }
-        if (!desc) desc = '✅ جميع الإجازات انتهت.';
-        return interaction.reply({ embeds: [new EmbedBuilder().setTitle('📋 الإجازات النشطة').setColor(0x3ba55d).setDescription(desc)] });
+
+        if (!desc) desc = 'لا يوجد بيانات.';
+        if (!anyActive && membersWithLeave.size > 0) {
+          desc += '\n⚠️ جميع الإجازات منتهية أو غير مسجلة.';
+        }
+
+        const embed = new EmbedBuilder()
+          .setTitle('📋 قائمة الإجازات النشطة (حسب الرتبة)')
+          .setColor(0x3ba55d)
+          .setDescription(desc)
+          .setTimestamp();
+
+        return interaction.reply({ embeds: [embed] });
       }
 
       // ===== أمر barren (متاح فقط لرتبة BARREN_ROLE_ID) =====
