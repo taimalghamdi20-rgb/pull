@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 
-// ===== سيرفر HTTP وهمي لإبقاء Render راضي على أنها Web Service شغالة =====
+// ===== سيرفر HTTP وهمي =====
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -11,7 +11,6 @@ http.createServer((req, res) => {
   console.log(`🌐 سيرفر HTTP الوهمي شغال على بورت ${PORT}`);
 });
 
-// ===== حماية عامة من الأخطاء غير الملتقطة =====
 process.on('unhandledRejection', (reason) => {
   console.error('⚠️ Unhandled Rejection:', reason);
 });
@@ -33,7 +32,6 @@ const {
   AttachmentBuilder,
 } = require('discord.js');
 
-// ===== قاعدة بيانات SQLite =====
 const Database = require('better-sqlite3');
 const db = new Database('data.db');
 
@@ -47,7 +45,6 @@ db.exec(`
   );
 `);
 
-// ===== المتغيرات البيئية =====
 const {
   BOT_TOKEN,
   GUILD_ID,
@@ -60,7 +57,6 @@ if (!BOT_TOKEN || !GUILD_ID || !WAITING_CHANNEL_ID || !ADMIN_ROLE_ID) {
   process.exit(1);
 }
 
-// ===== رومات الانتظار الإضافية =====
 const ADDITIONAL_WAITING_IDS = [
   '1481398869463138604',
   '1519511668823167116',
@@ -72,7 +68,6 @@ const WAITING_CHANNEL_IDS = [
   ...ADDITIONAL_WAITING_IDS
 ];
 
-// ===== خريطة روم الانتظار -> رومات الإدارة المخصصة =====
 const WAITING_ROOM_ADMIN_MAP = {
   '1519511668823167116': [
     '1531980761039638618',
@@ -125,7 +120,6 @@ const SPECIAL_ADMIN_ROOM_IDS = [
 ];
 const SPECIAL_REQUIRED_ADMIN_ROLE_ID = '1499102575918579793';
 
-// ===== إعدادات عامة =====
 const LEAVE_EMBED_CHANNEL_ID = '1529495796247167178';
 const LEAVE_PANEL_CHANNEL_ID = '1529440458030321714';
 const LEAVE_ROLE_ID = '1459304469127758027';
@@ -181,7 +175,6 @@ function hasBarrenRole(member) {
   return member.roles.cache.has(BARREN_ROLE_ID);
 }
 
-// ===== دوال قاعدة البيانات =====
 function loadActiveLeaves() {
   const stmt = db.prepare('SELECT user_id, end_date FROM active_leaves');
   const rows = stmt.all();
@@ -894,7 +887,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       // ===== الأمر المعدل active_leaves =====
       if (interaction.commandName === 'active_leaves') {
-        // التحقق من الصلاحية
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
         }
@@ -902,14 +894,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
         // تأكيد استلام التفاعل لتجنب انتهاء صلاحيته
         await interaction.deferReply({ ephemeral: true });
 
-        // الحصول على الرتبة من الكاش مباشرةً (لا حاجة لجلب الأعضاء)
-        const leaveRole = interaction.guild.roles.cache.get(LEAVE_ROLE_ID);
-        if (!leaveRole) {
-          return interaction.editReply({ content: '❌ رتبة الإجازة غير موجودة.' });
+        const leaveRoleId = LEAVE_ROLE_ID; // 1459304469127758027
+
+        // جلب الأعضاء الذين لديهم الرتبة مباشرةً من الـ API (محدث دائماً)
+        let membersWithLeave;
+        try {
+          membersWithLeave = await interaction.guild.members.fetch({ role: leaveRoleId });
+        } catch (err) {
+          console.error('❌ فشل جلب الأعضاء بالرتبة:', err);
+          return interaction.editReply({ content: '❌ حدث خطأ أثناء جلب الأعضاء.' });
         }
 
-        // استخدام role.members (وهو كاش الأعضاء الذين لديهم الرتبة)
-        const membersWithLeave = leaveRole.members;
         if (membersWithLeave.size === 0) {
           return interaction.editReply({ content: '🌴 لا يوجد أعضاء لديهم رتبة الإجازة حالياً.' });
         }
@@ -940,7 +935,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
             statusText = '❓ غير مسجل (لا توجد إجازة مسجلة)';
           }
 
-          desc += `**${index}.** <@${userId}> — ${statusText}\n`;
+          // إضافة اسم المستخدم مع المعرف
+          const userTag = member.user.tag;
+          desc += `**${index}.** <@${userId}> (${userTag}) — ${statusText}\n`;
           index++;
         }
 
