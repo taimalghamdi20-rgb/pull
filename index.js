@@ -176,6 +176,20 @@ const HM_BANNER_FILENAME = 'hm_banner.png';
 const HM_IN_COLOR = 0x0b5e2e;  // أخضر غامق
 const HM_OUT_COLOR = 0x7b241c; // أحمر غامق
 
+// ===== الرومات الصوتية المسموحة لتسجيل IN / OUT (لازم يكون العضو داخل أحدها) =====
+const HM_REQUIRED_VOICE_CHANNEL_IDS = [
+  '1534308524321018060',
+  '1534308489000779936',
+  '1534308507611041842',
+  '1534308470331805767',
+  '1520491813310562536'
+];
+const HM_AUTO_OUT_TIMEOUT_MS = 60 * 1000; // دقيقة واحدة قبل تسجيل الخروج التلقائي
+
+// ===== تتبع حالة تسجيل الدخول ومؤقتات الخروج التلقائي للإدارة العليا =====
+const hmCheckedIn = new Map();   // userId -> true إذا مسجل دخول حالياً
+const hmLeaveTimers = new Map(); // userId -> Timeout الخاص بالخروج التلقائي
+
 // ===== قائمة الرتب الإدارية المسموح بعرضها في الجرد (بالترتيب المطلوب) =====
 const ALLOWED_ROLE_IDS = [
   '1499162553245499432',
@@ -337,6 +351,40 @@ async function getLastPromotionDate(guild) {
   }
 
   return lastPromotionMap;
+}
+
+// ============================================================
+// خروج تلقائي للإدارة العليا (High Management) بعد مغادرة الرومات المطلوبة
+// ============================================================
+async function autoHmCheckout(guild, userId) {
+  const nowTimestamp = Math.floor(Date.now() / 1000);
+  hmCheckedIn.delete(userId);
+
+  try {
+    const logChannel = guild.channels.cache.get(HM_LOG_CHANNEL_ID);
+    if (!logChannel) return;
+
+    const user = await client.users.fetch(userId).catch(() => null);
+
+    const logEmbed = new EmbedBuilder()
+      .setColor(HM_OUT_COLOR)
+      .setAuthor({
+        name: user ? user.username : userId,
+        iconURL: user ? user.displayAvatarURL() : undefined
+      })
+      .setTitle('🔴 تسجيل خروج تلقائي (OUT)')
+      .setDescription('تم تسجيل الخروج تلقائياً بعد مغادرة الروم لمدة دقيقة بدون رجوع.')
+      .addFields(
+        { name: 'العضو', value: `<@${userId}>`, inline: true },
+        { name: 'الوقت', value: `<t:${nowTimestamp}:F>`, inline: true }
+      )
+      .setTimestamp();
+
+    await logChannel.send({ embeds: [logEmbed] });
+    console.log(`🔴 تم تسجيل خروج تلقائي لـ ${userId}`);
+  } catch (err) {
+    console.error('❌ خطأ في إرسال سجل الخروج التلقائي للإدارة العليا:', err);
+  }
 }
 
 // ============================================================
@@ -574,6 +622,39 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   if (!guild || guild.id !== GUILD_ID) return;
   const userId = newState.id;
 
+  // ===== تتبع دخول/خروج الإدارة العليا من الرومات المطلوبة =====
+  const isNowInHmRoom = newState.channelId && HM_REQUIRED_VOICE_CHANNEL_IDS.includes(newState.channelId);
+  const wasInHmRoom = oldState.channelId && HM_REQUIRED_VOICE_CHANNEL_IDS.includes(oldState.channelId);
+
+  // إذا رجع لأحد الرومات المطلوبة، نلغي مؤقت الخروج التلقائي إن وجد
+  if (isNowInHmRoom && hmLeaveTimers.has(userId)) {
+    clearTimeout(hmLeaveTimers.get(userId));
+    hmLeaveTimers.delete(userId);
+    console.log(`✅ ${userId} رجع لروم High Management، تم إلغاء مؤقت الخروج التلقائي.`);
+  }
+
+  // إذا خرج من روم مطلوب وهو مسجل دخول حالياً، نبدأ مؤقت دقيقة قبل تسجيل الخروج التلقائي
+  if (wasInHmRoom && !isNowInHmRoom && hmCheckedIn.has(userId)) {
+    if (hmLeaveTimers.has(userId)) {
+      clearTimeout(hmLeaveTimers.get(userId));
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const currentMember = await guild.members.fetch(userId).catch(() => null);
+        const currentChannelId = currentMember && currentMember.voice ? currentMember.voice.channelId : null;
+        const stillOutside = !currentChannelId || !HM_REQUIRED_VOICE_CHANNEL_IDS.includes(currentChannelId);
+        if (stillOutside && hmCheckedIn.has(userId)) {
+          await autoHmCheckout(guild, userId);
+        }
+      } catch (err) {
+        console.error('❌ خطأ في فحص الخروج التلقائي للإدارة العليا:', err);
+      } finally {
+        hmLeaveTimers.delete(userId);
+      }
+    }, HM_AUTO_OUT_TIMEOUT_MS);
+    hmLeaveTimers.set(userId, timer);
+  }
+
   const session = activeSessions.get(userId);
   if (session) {
     const adminId = session.adminId;
@@ -721,6 +802,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // ===== أزرار تسجيل الدخول/الخروج للإدارة العليا (High Management) =====
     if (interaction.isButton() && (interaction.customId === 'hm_check_in' || interaction.customId === 'hm_check_out')) {
       const isIn = interaction.customId === 'hm_check_in';
+
+      // ✅ لازم يكون العضو داخل أحد الرومات الصوتية المحددة عشان يقدر يسجل
+      const memberVoiceChannelId = interaction.member.voice.channelId;
+      const isInAllowedRoom = memberVoiceChannelId && HM_REQUIRED_VOICE_CHANNEL_IDS.includes(memberVoiceChannelId);
+
+      if (!isInAllowedRoom) {
+        const roomsList = HM_REQUIRED_VOICE_CHANNEL_IDS.map(id => `<#${id}>`).join('\n');
+        return interaction.reply({
+          content: `❌ لازم تكون داخل أحد الرومات التالية عشان تقدر تسجل ${isIn ? 'دخول (IN)' : 'خروج (OUT)'}:\n${roomsList}`,
+          ephemeral: true
+        });
+      }
+
       const nowTimestamp = Math.floor(Date.now() / 1000);
 
       try {
@@ -736,6 +830,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
             )
             .setTimestamp();
           await logChannel.send({ embeds: [logEmbed] });
+        }
+
+        // ✅ تحديث حالة التتبع وإلغاء أي مؤقت خروج تلقائي معلّق
+        if (hmLeaveTimers.has(interaction.user.id)) {
+          clearTimeout(hmLeaveTimers.get(interaction.user.id));
+          hmLeaveTimers.delete(interaction.user.id);
+        }
+        if (isIn) {
+          hmCheckedIn.set(interaction.user.id, true);
+        } else {
+          hmCheckedIn.delete(interaction.user.id);
         }
 
         await interaction.reply({
