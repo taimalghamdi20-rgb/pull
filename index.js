@@ -2,7 +2,9 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 
-// ===== سيرفر HTTP وهمي =====
+// ===== سيرفر HTTP وهمي لإبقاء Render راضي على أنها Web Service شغالة =====
+// Render يفحص عن بورت مفتوح، وبوت الديسكورد أصلاً ما يحتاج بورت،
+// فهذا السيرفر البسيط يفتح فقط عشان يمر فحص Render (Port Scan) بدون أي وظيفة فعلية.
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -11,6 +13,7 @@ http.createServer((req, res) => {
   console.log(`🌐 سيرفر HTTP الوهمي شغال على بورت ${PORT}`);
 });
 
+// ===== حماية عامة من الأخطاء غير الملتقطة (تمنع تعليق/طيحان البوت المفاجئ) =====
 process.on('unhandledRejection', (reason) => {
   console.error('⚠️ Unhandled Rejection:', reason);
 });
@@ -32,9 +35,11 @@ const {
   AttachmentBuilder,
 } = require('discord.js');
 
+// ===== قاعدة بيانات SQLite =====
 const Database = require('better-sqlite3');
 const db = new Database('data.db');
 
+// ===== إنشاء الجداول =====
 db.exec(`
   CREATE TABLE IF NOT EXISTS active_leaves (
     user_id TEXT PRIMARY KEY,
@@ -45,6 +50,7 @@ db.exec(`
   );
 `);
 
+// ===== المتغيرات البيئية =====
 const {
   BOT_TOKEN,
   GUILD_ID,
@@ -52,23 +58,12 @@ const {
   ADMIN_ROLE_ID,
 } = process.env;
 
-if (!BOT_TOKEN || BOT_TOKEN.trim() === '') {
-  console.error('❌ خطأ: BOT_TOKEN غير موجود أو فارغ.');
-  process.exit(1);
-}
-if (!GUILD_ID || GUILD_ID.trim() === '') {
-  console.error('❌ خطأ: GUILD_ID غير موجود.');
-  process.exit(1);
-}
-if (!WAITING_CHANNEL_ID || WAITING_CHANNEL_ID.trim() === '') {
-  console.error('❌ خطأ: WAITING_CHANNEL_ID غير موجود.');
-  process.exit(1);
-}
-if (!ADMIN_ROLE_ID || ADMIN_ROLE_ID.trim() === '') {
-  console.error('❌ خطأ: ADMIN_ROLE_ID غير موجود.');
+if (!BOT_TOKEN || !GUILD_ID || !WAITING_CHANNEL_ID || !ADMIN_ROLE_ID) {
+  console.error('❌ تأكد من تعبئة جميع المتغيرات في ملف .env');
   process.exit(1);
 }
 
+// ===== رومات الانتظار الإضافية =====
 const ADDITIONAL_WAITING_IDS = [
   '1481398869463138604',
   '1519511668823167116',
@@ -80,6 +75,7 @@ const WAITING_CHANNEL_IDS = [
   ...ADDITIONAL_WAITING_IDS
 ];
 
+// ===== خريطة روم الانتظار -> رومات الإدارة المخصصة =====
 const WAITING_ROOM_ADMIN_MAP = {
   '1519511668823167116': [
     '1531980761039638618',
@@ -112,10 +108,14 @@ const WAITING_ROOM_ADMIN_MAP = {
   ]
 };
 
+// ===== خريطة روم الانتظار -> الرتبة المطلوبة للإداري =====
 const WAITING_ROOM_REQUIRED_ROLE = {
   '1483285123008041031': '1486587636863864862'
 };
 
+// ===== حالة خاصة: رتبة معينة داخل روم انتظار معين =====
+// أي عضو يدخل SPECIAL_WAITING_ROOM_ID ومعه SPECIAL_ROLE_ID
+// يُسحب فقط لرومات SPECIAL_ADMIN_ROOM_IDS، ويشترط بالإداري رتبة SPECIAL_REQUIRED_ADMIN_ROLE_ID
 const SPECIAL_ROLE_ID = '1476796533168017428';
 const SPECIAL_WAITING_ROOM_ID = '1519511668823167116';
 const SPECIAL_ADMIN_ROOM_IDS = [
@@ -132,12 +132,14 @@ const SPECIAL_ADMIN_ROOM_IDS = [
 ];
 const SPECIAL_REQUIRED_ADMIN_ROLE_ID = '1499102575918579793';
 
+// ===== إعدادات عامة =====
 const LEAVE_EMBED_CHANNEL_ID = '1529495796247167178';
 const LEAVE_PANEL_CHANNEL_ID = '1529440458030321714';
 const LEAVE_ROLE_ID = '1459304469127758027';
 const RESIGNATION_KEEP_ROLE_ID = '1476796533168017428';
 const STAFF_ROLE_IDS = ['1459304407899443396', '1459304410923532481'];
 
+// ===== الرتب اللي تُمنشن مع كل طلب إجازة/استقالة/كسر إجازة يوصل لروم المراجعة =====
 const LEAVE_REQUEST_MENTION_ROLE_IDS = ['1459304407899443396', '1459304410923532481'];
 
 const WAITING_NOTIFICATION_CHANNEL_ID = '1530276832203636737';
@@ -163,8 +165,18 @@ const RATING_CHANNEL_ID = '1531018869764788446';
 const DONE_VOICE_CHANNEL_ID = '1499086608010449089';
 const BARREN_ROLE_ID = '1486588170282733700';
 
+// ===== قناة الترقيات (لاستخراج تاريخ آخر ترقية لكل إداري) =====
 const PROMOTION_CHANNEL_ID = '1459305425857155308';
 
+// ===== إعدادات لوحة تسجيل الدخول/الخروج للإدارة العليا (High Management) =====
+const HM_PANEL_CHANNEL_ID = '1534312045166592171'; // الروم الي ترسل فيه اللوحة
+const HM_LOG_CHANNEL_ID = '1534313854329159710';   // الروم الي يوصله السجل (Log)
+const HM_BANNER_PATH = path.join(__dirname, 'hm_banner.png');
+const HM_BANNER_FILENAME = 'hm_banner.png';
+const HM_IN_COLOR = 0x0b5e2e;  // أخضر غامق
+const HM_OUT_COLOR = 0x7b241c; // أحمر غامق
+
+// ===== قائمة الرتب الإدارية المسموح بعرضها في الجرد (بالترتيب المطلوب) =====
 const ALLOWED_ROLE_IDS = [
   '1499162553245499432',
   '1480102405931667467',
@@ -187,6 +199,7 @@ function hasBarrenRole(member) {
   return member.roles.cache.has(BARREN_ROLE_ID);
 }
 
+// ===== دوال قاعدة البيانات =====
 function loadActiveLeaves() {
   const stmt = db.prepare('SELECT user_id, end_date FROM active_leaves');
   const rows = stmt.all();
@@ -214,8 +227,10 @@ function markSessionEvaluated(sessionId) {
   stmt.run(sessionId);
 }
 
+// ===== تحميل البيانات =====
 const activeLeaves = loadActiveLeaves();
 
+// ===== دوال مساعدة =====
 const MAX_LEAVE_DAYS = 14;
 const LEAVE_PANEL_COLOR = 0xC2410C;
 const LEAVE_BANNER_PATH = path.join(__dirname, 'leave_banner.png');
@@ -233,10 +248,14 @@ const client = new Client({
   ],
 });
 
+// ===== حالة الجلسات النشطة والكول داون =====
 const activeSessions = new Map();
 const cooldownMap = new Map();
 const waitingTimers = new Map();
 
+// ============================================================
+// دوال التقييم
+// ============================================================
 function ratingStarsBar(rating) {
   const filled = '⭐'.repeat(rating);
   const empty = '☆'.repeat(5 - rating);
@@ -254,25 +273,9 @@ function ratingLabel(rating) {
   return labels[rating] || '';
 }
 
-async function fetchAllMessages(channelId, limit = 500) {
-  const channel = client.channels.cache.get(channelId);
-  if (!channel) return [];
-  const messages = [];
-  let lastId = null;
-  let fetched = 0;
-  while (fetched < limit) {
-    const options = { limit: Math.min(100, limit - fetched) };
-    if (lastId) options.before = lastId;
-    const msgs = await channel.messages.fetch(options);
-    if (msgs.size === 0) break;
-    messages.push(...msgs.values());
-    lastId = msgs.last().id;
-    fetched += msgs.size;
-    if (msgs.size < 100) break;
-  }
-  return messages;
-}
-
+// ============================================================
+// دوال جلب الإحصائيات (لأمر barren) - مع دعم تاريخ الترقية
+// ============================================================
 async function fetchMessagesFromDate(channelId, fromDate) {
   try {
     const channel = client.channels.cache.get(channelId);
@@ -299,6 +302,7 @@ async function fetchMessagesFromDate(channelId, fromDate) {
   }
 }
 
+// دالة لاستخراج آخر تاريخ ترقية لكل إداري من قناة الترقيات
 async function getLastPromotionDate(guild) {
   const promotionChannel = client.channels.cache.get(PROMOTION_CHANNEL_ID);
   if (!promotionChannel) {
@@ -310,15 +314,18 @@ async function getLastPromotionDate(guild) {
   let lastId = null;
   let fetched = 0;
   const limit = 1000;
+  // نبحث في آخر 1000 رسالة (عادةً تكفي لآخر شهرين من الترقيات)
   while (fetched < limit) {
     const options = { limit: 100 };
     if (lastId) options.before = lastId;
     const msgs = await promotionChannel.messages.fetch(options);
     if (msgs.size === 0) break;
     for (const [, msg] of msgs) {
+      // نبحث عن منشن عضو في الرسالة
       const match = msg.content.match(/<@!?(\d+)>/);
       if (match) {
         const userId = match[1];
+        // إذا لم يكن لدينا تاريخ لهذا المستخدم من قبل، نخزن التاريخ (أحدث ترقية تكون أول ظهور)
         if (!lastPromotionMap.has(userId)) {
           lastPromotionMap.set(userId, msg.createdTimestamp);
         }
@@ -326,11 +333,15 @@ async function getLastPromotionDate(guild) {
     }
     lastId = msgs.last().id;
     fetched += msgs.size;
-    if (msgs.size < 100) break;
+    if (msgs.size < 100) break; // إذا وصلنا لنهاية القناة
   }
+
   return lastPromotionMap;
 }
 
+// ============================================================
+// حماية روم الإجازات
+// ============================================================
 client.on(Events.MessageCreate, async (message) => {
   if (message.guild && message.channelId === LEAVE_EMBED_CHANNEL_ID) {
     if (message.author.bot) return;
@@ -341,6 +352,9 @@ client.on(Events.MessageCreate, async (message) => {
   }
 });
 
+// ============================================================
+// دوال السحب التلقائي المباشر
+// ============================================================
 function isDeafened(voiceState) {
   if (!voiceState) return false;
   return voiceState.selfDeaf || voiceState.serverDeaf;
@@ -367,6 +381,7 @@ function isFreeAdminRoom(channel, targetAdminRoomIds, requiredRoleId = null) {
   const adminMember = members[0];
   if (requiredRoleId && !adminMember.roles.cache.has(requiredRoleId)) return false;
   if (!adminMember.roles.cache.has(ADMIN_ROLE_ID)) return false;
+  // ✅ تم تصحيح الشرط هنا: الإداري المتفرغ هو الذي لم يقم بـ Deafen
   return !isDeafened(adminMember.voice);
 }
 
@@ -397,8 +412,6 @@ async function sendCitizenNotification(citizenUser, adminUser) {
 }
 
 async function tryPullForAllFreeAdmins(guild) {
-  if (!guild || !client) return;
-
   const waitingData = getNextEligibleWaitingMember(guild);
   if (!waitingData) return;
 
@@ -407,6 +420,7 @@ async function tryPullForAllFreeAdmins(guild) {
   let targetAdminRoomIds;
   let requiredRoleId;
 
+  // ===== الحالة الخاصة: روم انتظار معين + رتبة معينة عند المواطن =====
   const isSpecialCase =
     waitingChannelId === SPECIAL_WAITING_ROOM_ID &&
     candidate.roles.cache.has(SPECIAL_ROLE_ID);
@@ -436,11 +450,14 @@ async function tryPullForAllFreeAdmins(guild) {
   if (activeSessions.has(candidate.id)) return;
 
   const eligibleAdmins = freeAdmins.filter(({ adminMember }) => {
+    // ✅ فحص كول داون 15 ثانية للإداري (لمنع سحب مواطن ثانٍ له مباشرة)
     const adminCooldownKey = adminMember.id;
     const adminCooldownEnd = cooldownMap.get(adminCooldownKey);
     if (adminCooldownEnd && adminCooldownEnd > Date.now()) {
       return false;
     }
+
+    // فحص كول داون 60 ثانية للزوج (إداري + مواطن)
     const pairKey = `${adminMember.id}_${candidate.id}`;
     const pairCooldownEnd = cooldownMap.get(pairKey);
     if (pairCooldownEnd && pairCooldownEnd > Date.now()) {
@@ -467,20 +484,20 @@ async function tryPullForAllFreeAdmins(guild) {
       startTime: Date.now()
     });
 
+    // ✅ تعيين كول داون 15 ثانية للإداري بعد سحب المواطن له
     cooldownMap.set(adminMember.id, Date.now() + 15 * 1000);
 
     await sendCitizenNotification(candidate.user, adminMember.user);
 
     console.log(`✅ تم سحب ${candidate.user.tag} إلى ${adminMember.user.tag}`);
   } catch (err) {
-    if (err.message && err.message.includes('token')) {
-      console.warn('⚠️ تجاهل خطأ سحب بسبب مشكلة توكن');
-    } else {
-      console.error(`⚠️ فشل سحب ${candidate.user.tag}:`, err.message);
-    }
+    console.error(`⚠️ فشل سحب ${candidate.user.tag}:`, err.message);
   }
 }
 
+// ============================================================
+// دالة إنهاء الجلسة مع إرسال تقييم
+// ============================================================
 async function endSession(guild, citizenId, adminId, startTime) {
   const durationSec = Math.floor((Date.now() - startTime) / 1000);
   const minutes = Math.floor(durationSec / 60);
@@ -529,6 +546,9 @@ async function endSession(guild, citizenId, adminId, startTime) {
   }
 }
 
+// ============================================================
+// تسجيل الأوامر
+// ============================================================
 client.once(Events.ClientReady, async (c) => {
   console.log(`🤖 البوت شغال باسم ${c.user.tag}`);
   try {
@@ -536,7 +556,8 @@ client.once(Events.ClientReady, async (c) => {
       { name: 'send_leave_panel', description: 'إرسال لوحة طلبات الإجازات والاستقالات' },
       { name: 'active_leaves', description: 'عرض قائمة الإداريين المجازين' },
       { name: 'barren', description: 'جرد إحصائيات فريق التفعيل' },
-      { name: 'privacy', description: 'عرض سياسة الخصوصية الخاصة بالبوت' }
+      { name: 'privacy', description: 'عرض سياسة الخصوصية الخاصة بالبوت' },
+      { name: 'send_hm_panel', description: 'إرسال لوحة تسجيل الدخول والخروج للإدارة العليا' }
     ];
     await c.application.commands.set(commands, GUILD_ID);
     console.log('✅ تم تسجيل الأوامر.');
@@ -545,6 +566,9 @@ client.once(Events.ClientReady, async (c) => {
   }
 });
 
+// ============================================================
+// أحداث الصوت
+// ============================================================
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const guild = newState.guild || oldState.guild;
   if (!guild || guild.id !== GUILD_ID) return;
@@ -608,11 +632,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           const entry = waitingTimers.get(userId);
           if (entry) entry.sent = true;
         } catch (err) {
-          if (err.message && err.message.includes('token')) {
-            console.warn('⚠️ تجاهل خطأ تنبيه الانتظار بسبب مشكلة توكن');
-          } else {
-            console.error('❌ خطأ في تنبيه الانتظار:', err);
-          }
+          console.error('❌ خطأ في تنبيه الانتظار:', err);
         }
       }, WAITING_TIMEOUT_MS);
 
@@ -635,11 +655,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
       try {
         await tryPullForAllFreeAdmins(guild);
       } catch (err) {
-        if (err.message && err.message.includes('token')) {
-          console.warn('⚠️ تجاهل خطأ سحب (enteredWaiting) بسبب مشكلة توكن');
-        } else {
-          console.error('❌ خطأ في السحب (enteredWaiting):', err);
-        }
+        console.error('❌ خطأ في السحب (enteredWaiting):', err);
       }
     }
   }
@@ -647,14 +663,13 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   try {
     await tryPullForAllFreeAdmins(guild);
   } catch (err) {
-    if (err.message && err.message.includes('token')) {
-      console.warn('⚠️ تجاهل خطأ سحب عام بسبب مشكلة توكن');
-    } else {
-      console.error('خطأ في السحب:', err);
-    }
+    console.error('خطأ في السحب:', err);
   }
 });
 
+// ============================================================
+// معالج التفاعلات (الإجازات + التقييم + barren)
+// ============================================================
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     // ===== أزرار التقييم =====
@@ -703,93 +718,107 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    // ===== أزرار تسجيل الدخول/الخروج للإدارة العليا (High Management) =====
+    if (interaction.isButton() && (interaction.customId === 'hm_check_in' || interaction.customId === 'hm_check_out')) {
+      const isIn = interaction.customId === 'hm_check_in';
+      const nowTimestamp = Math.floor(Date.now() / 1000);
+
+      try {
+        const logChannel = interaction.guild.channels.cache.get(HM_LOG_CHANNEL_ID);
+        if (logChannel) {
+          const logEmbed = new EmbedBuilder()
+            .setColor(isIn ? HM_IN_COLOR : HM_OUT_COLOR)
+            .setAuthor({ name: interaction.user.username, iconURL: interaction.user.displayAvatarURL() })
+            .setTitle(isIn ? '🟢 تسجيل دخول (IN)' : '🔴 تسجيل خروج (OUT)')
+            .addFields(
+              { name: 'العضو', value: `<@${interaction.user.id}>`, inline: true },
+              { name: 'الوقت', value: `<t:${nowTimestamp}:F>`, inline: true }
+            )
+            .setTimestamp();
+          await logChannel.send({ embeds: [logEmbed] });
+        }
+
+        await interaction.reply({
+          content: isIn ? '✅ تم تسجيل دخولك (IN).' : '✅ تم تسجيل خروجك (OUT).',
+          ephemeral: true
+        });
+      } catch (err) {
+        console.error('❌ خطأ في تسجيل دخول/خروج الإدارة العليا:', err);
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({ content: '❌ حدث خطأ أثناء التسجيل.', ephemeral: true }).catch(() => null);
+        }
+      }
+      return;
+    }
+
     // ===== باقي الأزرار (الإجازات) =====
     if (interaction.isButton()) {
-      // طلب إجازة
       if (interaction.customId === 'open_leave_modal') {
-        try {
-          const modal = new ModalBuilder()
-            .setCustomId('leave_modal')
-            .setTitle('📄 طلب إجازة')
-            .addComponents(
-              new ActionRowBuilder().addComponents(
-                new TextInputBuilder()
-                  .setCustomId('leave_duration')
-                  .setLabel(`عدد الأيام (أقصى ${MAX_LEAVE_DAYS})`)
-                  .setStyle(TextInputStyle.Short)
-                  .setPlaceholder('مثال: 3')
-                  .setRequired(true)
-                  .setMaxLength(2)
-              ),
-              new ActionRowBuilder().addComponents(
-                new TextInputBuilder()
-                  .setCustomId('leave_reason')
-                  .setLabel('سبب الإجازة')
-                  .setStyle(TextInputStyle.Paragraph)
-                  .setPlaceholder('اكتب السبب بالتفصيل')
-                  .setRequired(true)
-                  .setMaxLength(500)
-              )
-            );
-          await interaction.showModal(modal);
-        } catch (err) {
-          console.error('❌ فشل عرض مودال الإجازة:', err);
-          await interaction.reply({ content: '❌ حدث خطأ أثناء فتح نموذج الإجازة، حاول مجدداً.', ephemeral: true }).catch(() => null);
-        }
+        const modal = new ModalBuilder()
+          .setCustomId('leave_modal')
+          .setTitle('📄 طلب إجازة')
+          .addComponents(
+            new ActionRowBuilder().addComponents(
+              new TextInputBuilder()
+                .setCustomId('leave_duration')
+                .setLabel(`عدد الأيام (أقصى ${MAX_LEAVE_DAYS})`)
+                .setStyle(TextInputStyle.Short)
+                .setPlaceholder('مثال: 3')
+                .setRequired(true)
+                .setMaxLength(2)
+            ),
+            new ActionRowBuilder().addComponents(
+              new TextInputBuilder()
+                .setCustomId('leave_reason')
+                .setLabel('سبب الإجازة')
+                .setStyle(TextInputStyle.Paragraph)
+                .setPlaceholder('اكتب السبب بالتفصيل')
+                .setRequired(true)
+                .setMaxLength(500)
+            )
+          );
+        await interaction.showModal(modal);
         return;
       }
 
-      // طلب استقالة
       if (interaction.customId === 'open_resign_modal') {
-        try {
-          const modal = new ModalBuilder()
-            .setCustomId('resign_modal')
-            .setTitle('📝 طلب استقالة')
-            .addComponents(
-              new ActionRowBuilder().addComponents(
-                new TextInputBuilder()
-                  .setCustomId('resign_reason')
-                  .setLabel('سبب الاستقالة')
-                  .setStyle(TextInputStyle.Paragraph)
-                  .setPlaceholder('اكتب السبب بالتفصيل')
-                  .setRequired(true)
-                  .setMaxLength(500)
-              )
-            );
-          await interaction.showModal(modal);
-        } catch (err) {
-          console.error('❌ فشل عرض مودال الاستقالة:', err);
-          await interaction.reply({ content: '❌ حدث خطأ أثناء فتح نموذج الاستقالة، حاول مجدداً.', ephemeral: true }).catch(() => null);
-        }
+        const modal = new ModalBuilder()
+          .setCustomId('resign_modal')
+          .setTitle('📝 طلب استقالة')
+          .addComponents(
+            new ActionRowBuilder().addComponents(
+              new TextInputBuilder()
+                .setCustomId('resign_reason')
+                .setLabel('سبب الاستقالة')
+                .setStyle(TextInputStyle.Paragraph)
+                .setPlaceholder('اكتب السبب بالتفصيل')
+                .setRequired(true)
+                .setMaxLength(500)
+            )
+          );
+        await interaction.showModal(modal);
         return;
       }
 
-      // طلب كسر إجازة
       if (interaction.customId === 'open_break_modal') {
-        try {
-          const modal = new ModalBuilder()
-            .setCustomId('break_modal')
-            .setTitle('🔓 طلب كسر إجازة')
-            .addComponents(
-              new ActionRowBuilder().addComponents(
-                new TextInputBuilder()
-                  .setCustomId('break_reason')
-                  .setLabel('سبب كسر الإجازة')
-                  .setStyle(TextInputStyle.Paragraph)
-                  .setPlaceholder('اكتب السبب بالتفصيل')
-                  .setRequired(true)
-                  .setMaxLength(500)
-              )
-            );
-          await interaction.showModal(modal);
-        } catch (err) {
-          console.error('❌ فشل عرض مودال كسر الإجازة:', err);
-          await interaction.reply({ content: '❌ حدث خطأ أثناء فتح نموذج كسر الإجازة، حاول مجدداً.', ephemeral: true }).catch(() => null);
-        }
+        const modal = new ModalBuilder()
+          .setCustomId('break_modal')
+          .setTitle('🔓 طلب كسر إجازة')
+          .addComponents(
+            new ActionRowBuilder().addComponents(
+              new TextInputBuilder()
+                .setCustomId('break_reason')
+                .setLabel('سبب كسر الإجازة')
+                .setStyle(TextInputStyle.Paragraph)
+                .setPlaceholder('اكتب السبب بالتفصيل')
+                .setRequired(true)
+                .setMaxLength(500)
+            )
+          );
+        await interaction.showModal(modal);
         return;
       }
 
-      // أزرار قبول/رفض الطلبات
       if (interaction.customId && (interaction.customId.startsWith('req_accept_') || interaction.customId.startsWith('req_reject_'))) {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ هذا الإجراء خاص بالإدارة.', ephemeral: true });
@@ -953,117 +982,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: `✅ تم إرسال اللوحة إلى <#${LEAVE_EMBED_CHANNEL_ID}>.`, ephemeral: true });
       }
 
-      // ===== الأمر active_leaves =====
       if (interaction.commandName === 'active_leaves') {
-        if (!hasStaffRole(interaction.member)) {
-          return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
-        }
-
-        await interaction.deferReply({ ephemeral: true });
-
-        const leaveRoleId = LEAVE_ROLE_ID;
-        let membersWithLeave;
-        try {
-          membersWithLeave = await interaction.guild.members.fetch({ role: leaveRoleId });
-        } catch (err) {
-          console.error('❌ فشل جلب الأعضاء بالرتبة:', err);
-          return interaction.editReply({ content: '❌ حدث خطأ أثناء جلب الأعضاء.' });
-        }
-
-        if (membersWithLeave.size === 0) {
-          return interaction.editReply({ content: '🌴 لا يوجد أعضاء لديهم رتبة الإجازة حالياً.' });
-        }
-
-        let messages = [];
-        try {
-          messages = await fetchAllMessages(LEAVE_PANEL_CHANNEL_ID, 500);
-        } catch (err) {
-          console.error('❌ فشل جلب رسائل القناة:', err);
-          return interaction.editReply({ content: '❌ حدث خطأ أثناء جلب رسائل القناة.' });
-        }
-
-        const acceptedLeaveMap = new Map();
-        for (const msg of messages) {
-          if (msg.embeds.length === 0) continue;
-          const embed = msg.embeds[0];
-          if (!embed.title || !embed.title.includes('طلب إجازة')) continue;
-          const fields = embed.fields || [];
-          const statusField = fields.find(f => f.name.includes('الحالة'));
-          if (!statusField || !statusField.value.includes('تم القبول')) continue;
-          const description = embed.description || '';
-          const match = description.match(/<@!?(\d+)>/);
-          if (!match) continue;
-          const userId = match[1];
-          const durationField = fields.find(f => f.name.includes('المدة'));
-          if (!durationField) continue;
-          const durationMatch = durationField.value.match(/\d+/);
-          if (!durationMatch) continue;
-          const days = parseInt(durationMatch[0]);
-          const existing = acceptedLeaveMap.get(userId);
-          if (!existing || msg.createdTimestamp > existing.acceptedTimestamp) {
-            acceptedLeaveMap.set(userId, {
-              durationDays: days,
-              acceptedTimestamp: msg.createdTimestamp
-            });
-          }
-        }
-
-        let lines = [];
+        if (!hasStaffRole(interaction.member)) return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
+        if (activeLeaves.size === 0) return interaction.reply({ content: '🌴 لا يوجد إداري في إجازة.', ephemeral: true });
+        let desc = '';
         let index = 1;
-        let anyActive = false;
-        for (const [userId, member] of membersWithLeave) {
-          const leaveInfo = acceptedLeaveMap.get(userId);
-          let statusText = '';
-          if (leaveInfo) {
-            const endDate = leaveInfo.acceptedTimestamp + (leaveInfo.durationDays * 24 * 60 * 60 * 1000);
-            const remaining = endDate - Date.now();
-            if (remaining <= 0) {
-              statusText = '✅ انتهت';
-            } else {
-              const days = Math.floor(remaining / (1000 * 60 * 60 * 24));
-              const hours = Math.floor((remaining % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-              statusText = `⏳ متبقي: ${days} يوم و ${hours} ساعة`;
-              anyActive = true;
-            }
-          } else {
-            statusText = '❓ غير مسجل (لا يوجد طلب إجازة مقبول)';
-          }
-          lines.push(`**${index}.** <@${userId}> — ${statusText}`);
+        for (const [userId, data] of activeLeaves) {
+          const remaining = data.endDate - Date.now();
+          if (remaining <= 0) { activeLeaves.delete(userId); saveActiveLeaves(); continue; }
+          const days = Math.floor(remaining / (1000*60*60*24));
+          const hours = Math.floor((remaining % (1000*60*60*24)) / (1000*60*60));
+          desc += `**${index}.** <@${userId}> — متبقي: \`${days} يوم و ${hours} ساعة\`\n`;
           index++;
         }
-
-        if (lines.length === 0) {
-          return interaction.editReply({ content: 'لا توجد بيانات.' });
-        }
-
-        if (!anyActive) {
-          lines.push('\n⚠️ جميع الإجازات منتهية أو غير مسجلة.');
-        }
-
-        const header = '📋 قائمة الإجازات النشطة (حسب الرتبة)\n\n';
-        const fullText = header + lines.join('\n');
-
-        const MAX_LENGTH = 2000;
-        let parts = [];
-        let currentPart = '';
-        const allLines = fullText.split('\n');
-        for (const line of allLines) {
-          if ((currentPart + line + '\n').length > MAX_LENGTH) {
-            parts.push(currentPart);
-            currentPart = '';
-          }
-          currentPart += (currentPart ? '\n' : '') + line;
-        }
-        if (currentPart) parts.push(currentPart);
-
-        await interaction.editReply({ content: parts[0] });
-        for (let i = 1; i < parts.length; i++) {
-          await interaction.followUp({ content: parts[i] });
-        }
-        return;
+        if (!desc) desc = '✅ جميع الإجازات انتهت.';
+        return interaction.reply({ embeds: [new EmbedBuilder().setTitle('📋 الإجازات النشطة').setColor(0x3ba55d).setDescription(desc)] });
       }
 
-      // ===== أمر barren =====
+      // ===== أمر barren (متاح فقط لرتبة BARREN_ROLE_ID) =====
       if (interaction.commandName === 'barren') {
         if (!hasBarrenRole(interaction.member)) {
           return interaction.reply({ 
@@ -1091,6 +1027,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
         console.log(`✅ تم العثور على الرتبة: "${role.name}" (${role.id})`);
 
+        // استخدام role.members للحصول على العدد الصحيح
         const members = role.members;
         console.log(`📊 عدد الأعضاء في role.members: ${members.size}`);
 
@@ -1098,15 +1035,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.editReply({ content: '❌ لا يوجد أعضاء في فريق التفعيل.' });
         }
 
+        // جلب آخر تاريخ ترقية لكل إداري
         console.log('🔄 جاري جلب تواريخ آخر ترقية لكل إداري من قناة الترقيات...');
         const lastPromotionMap = await getLastPromotionDate(guild);
         console.log(`✅ تم جلب تواريخ الترقية لـ ${lastPromotionMap.size} إداري.`);
 
+        // قنوات الإحصائيات
         const activateChannel = '1484859915200626829';
         const rejectChannel = '1484865429158756494';
         const reactivateChannel = '1493565275428225125';
 
-        const days = 30;
+        // جلب الرسائل من القنوات - سنقوم بجلبها لكل إداري حسب تاريخ ترقيته
+        // ولكن لتحسين الأداء، نجلب جميع الرسائل من القنوات (آخر 30 يوم) ثم نفلتر حسب التاريخ لكل إداري
+        const days = 30; // نأخذ 30 يوم للاحتياط
         const [activateMsgs, rejectMsgs, reactivateMsgs] = await Promise.all([
           fetchMessagesFromDate(activateChannel, Date.now() - days * 24 * 60 * 60 * 1000),
           fetchMessagesFromDate(rejectChannel, Date.now() - days * 24 * 60 * 60 * 1000),
@@ -1117,11 +1058,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         console.log(`📊 عدد رسائل الرفض: ${rejectMsgs.length}`);
         console.log(`📊 عدد رسائل إعادة التفعيل: ${reactivateMsgs.length}`);
 
+        // حساب الإحصائيات لكل عضو بناءً على تاريخ ترقيته
         const stats = [];
         for (const [id, member] of members) {
-          const promotionDate = lastPromotionMap.get(id) || Date.now() - 7 * 24 * 60 * 60 * 1000;
+          // الحصول على تاريخ آخر ترقية لهذا العضو
+          const promotionDate = lastPromotionMap.get(id) || Date.now() - 7 * 24 * 60 * 60 * 1000; // إذا لم يوجد، نأخذ آخر 7 أيام
           console.log(`   ⏰ ${member.user.tag} آخر ترقية: ${new Date(promotionDate).toLocaleDateString('ar-SA')}`);
 
+          // تصفية الرسائل التي تمت بعد تاريخ الترقية
           const activates = activateMsgs.filter(msg => 
             msg.createdTimestamp >= promotionDate && msg.content.includes(`<@${id}>`)
           ).length;
@@ -1132,6 +1076,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             msg.createdTimestamp >= promotionDate && msg.content.includes(`<@${id}>`)
           ).length;
 
+          // ✅ ترتيب الرتب حسب ترتيب ALLOWED_ROLE_IDS بدلاً من ترتيب عشوائي من روم كاش العضو
           const roleMentions = ALLOWED_ROLE_IDS
             .filter(roleId => member.roles.cache.has(roleId))
             .map(roleId => `<@&${roleId}>`)
@@ -1149,6 +1094,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         stats.sort((a, b) => b.activates - a.activates);
 
+        // بناء النص الأساسي
         let bodyText = '';
         for (const stat of stats) {
           const promotionDateStr = new Date(stat.promotionDate).toLocaleDateString('ar-SA');
@@ -1165,6 +1111,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const header = `📊 جرد فريق التفعيل (منذ آخر ترقية لكل عضو)\n\n`;
         const footer = `\n**تم جرد ${totalCount} شخص.**`;
 
+        // تقسيم النص
         const MAX_MSG_LENGTH = 2000;
         const fullText = header + bodyText + footer;
 
@@ -1189,6 +1136,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
           console.log(`📊 عدد الأجزاء: ${parts.length}`);
 
+          const totalParts = parts.length;
           const logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
 
           for (let i = 0; i < parts.length; i++) {
@@ -1202,6 +1150,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             }
 
             if (content.length > MAX_MSG_LENGTH) {
+              // تقسيم إضافي إذا لزم الأمر
               const subParts = [];
               let sub = '';
               const subLines = content.split('\n');
@@ -1247,7 +1196,32 @@ client.on(Events.InteractionCreate, async (interaction) => {
         console.log('==============================================================\n');
       }
 
-      // أمر privacy
+      // ✅ أمر /send_hm_panel - إرسال لوحة تسجيل الدخول والخروج للإدارة العليا
+      if (interaction.commandName === 'send_hm_panel') {
+        if (!hasStaffRole(interaction.member)) {
+          return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
+        }
+
+        const hmEmbed = new EmbedBuilder()
+          .setTitle('Admins Login - Logout')
+          .setDescription(`• Login : تسجيل دخول\n• Logout : تسجيل خروج`)
+          .setColor(0x2b2d31)
+          .setImage(`attachment://${HM_BANNER_FILENAME}`)
+          .setFooter({ text: 'First Town by Kaspier' })
+          .setTimestamp();
+
+        const hmRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('hm_check_in').setLabel('IN').setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId('hm_check_out').setLabel('OUT').setStyle(ButtonStyle.Danger)
+        );
+
+        const hmFile = new AttachmentBuilder(HM_BANNER_PATH, { name: HM_BANNER_FILENAME });
+        const hmChannel = await interaction.guild.channels.fetch(HM_PANEL_CHANNEL_ID);
+        await hmChannel.send({ embeds: [hmEmbed], components: [hmRow], files: [hmFile] });
+        return interaction.reply({ content: `✅ تم إرسال لوحة تسجيل الدخول/الخروج إلى <#${HM_PANEL_CHANNEL_ID}>.`, ephemeral: true });
+      }
+
+      // ✅ أمر /privacy
       if (interaction.commandName === 'privacy') {
         const privacyUrl = process.env.PRIVACY_POLICY_URL;
 
@@ -1269,19 +1243,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   } catch (error) {
     console.error('❌ خطأ في التفاعل:', error);
-    // إذا كان التفاعل منتهي الصلاحية، لا نحاول الرد
-    if (error.code === 10062) {
-      console.warn('⏳ تفاعل منتهي الصلاحية (10062)');
-      return;
-    }
     if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({ content: '❌ حدث خطأ غير متوقع، يرجى المحاولة مرة أخرى.', ephemeral: true }).catch(() => null);
+      await interaction.reply({ content: '❌ حدث خطأ.', ephemeral: true }).catch(() => null);
     } else if (interaction.deferred) {
       await interaction.editReply({ content: '❌ حدث خطأ أثناء تنفيذ الأمر.' }).catch(() => null);
     }
   }
 });
 
+// ============================================================
+// حفظ البيانات عند الإغلاق
+// ============================================================
 process.on('SIGINT', () => {
   console.log('🔄 حفظ البيانات...');
   saveActiveLeaves();
@@ -1294,7 +1266,4 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
-client.login(BOT_TOKEN.trim()).catch(err => {
-  console.error('❌ فشل تسجيل الدخول:', err);
-  process.exit(1);
-});
+client.login(BOT_TOKEN);
