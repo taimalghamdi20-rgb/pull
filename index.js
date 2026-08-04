@@ -45,7 +45,6 @@ db.exec(`
   );
 `);
 
-// ===== المتغيرات البيئية =====
 const {
   BOT_TOKEN,
   GUILD_ID,
@@ -53,21 +52,20 @@ const {
   ADMIN_ROLE_ID,
 } = process.env;
 
-// ===== تحقق صارم من المتغيرات الأساسية =====
 if (!BOT_TOKEN || BOT_TOKEN.trim() === '') {
-  console.error('❌ خطأ: BOT_TOKEN غير موجود أو فارغ. تأكد من تعبئته في متغيرات البيئة.');
+  console.error('❌ خطأ: BOT_TOKEN غير موجود أو فارغ.');
   process.exit(1);
 }
 if (!GUILD_ID || GUILD_ID.trim() === '') {
-  console.error('❌ خطأ: GUILD_ID غير موجود أو فارغ.');
+  console.error('❌ خطأ: GUILD_ID غير موجود.');
   process.exit(1);
 }
 if (!WAITING_CHANNEL_ID || WAITING_CHANNEL_ID.trim() === '') {
-  console.error('❌ خطأ: WAITING_CHANNEL_ID غير موجود أو فارغ.');
+  console.error('❌ خطأ: WAITING_CHANNEL_ID غير موجود.');
   process.exit(1);
 }
 if (!ADMIN_ROLE_ID || ADMIN_ROLE_ID.trim() === '') {
-  console.error('❌ خطأ: ADMIN_ROLE_ID غير موجود أو فارغ.');
+  console.error('❌ خطأ: ADMIN_ROLE_ID غير موجود.');
   process.exit(1);
 }
 
@@ -399,7 +397,6 @@ async function sendCitizenNotification(citizenUser, adminUser) {
 }
 
 async function tryPullForAllFreeAdmins(guild) {
-  // تحقق من وجود guild و client
   if (!guild || !client) return;
 
   const waitingData = getNextEligibleWaitingMember(guild);
@@ -476,9 +473,8 @@ async function tryPullForAllFreeAdmins(guild) {
 
     console.log(`✅ تم سحب ${candidate.user.tag} إلى ${adminMember.user.tag}`);
   } catch (err) {
-    // تجاهل أخطاء التوكن لأن البوت قد يكون غير جاهز
     if (err.message && err.message.includes('token')) {
-      console.warn('⚠️ تجاهل خطأ سحب بسبب مشكلة توكن (ربما البوت لم يسجل الدخول بعد)');
+      console.warn('⚠️ تجاهل خطأ سحب بسبب مشكلة توكن');
     } else {
       console.error(`⚠️ فشل سحب ${candidate.user.tag}:`, err.message);
     }
@@ -709,72 +705,91 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     // ===== باقي الأزرار (الإجازات) =====
     if (interaction.isButton()) {
+      // طلب إجازة
       if (interaction.customId === 'open_leave_modal') {
-        const modal = new ModalBuilder()
-          .setCustomId('leave_modal')
-          .setTitle('📄 طلب إجازة')
-          .addComponents(
-            new ActionRowBuilder().addComponents(
-              new TextInputBuilder()
-                .setCustomId('leave_duration')
-                .setLabel(`عدد الأيام (أقصى ${MAX_LEAVE_DAYS})`)
-                .setStyle(TextInputStyle.Short)
-                .setPlaceholder('مثال: 3')
-                .setRequired(true)
-                .setMaxLength(2)
-            ),
-            new ActionRowBuilder().addComponents(
-              new TextInputBuilder()
-                .setCustomId('leave_reason')
-                .setLabel('سبب الإجازة')
-                .setStyle(TextInputStyle.Paragraph)
-                .setPlaceholder('اكتب السبب بالتفصيل')
-                .setRequired(true)
-                .setMaxLength(500)
-            )
-          );
-        await interaction.showModal(modal);
+        try {
+          const modal = new ModalBuilder()
+            .setCustomId('leave_modal')
+            .setTitle('📄 طلب إجازة')
+            .addComponents(
+              new ActionRowBuilder().addComponents(
+                new TextInputBuilder()
+                  .setCustomId('leave_duration')
+                  .setLabel(`عدد الأيام (أقصى ${MAX_LEAVE_DAYS})`)
+                  .setStyle(TextInputStyle.Short)
+                  .setPlaceholder('مثال: 3')
+                  .setRequired(true)
+                  .setMaxLength(2)
+              ),
+              new ActionRowBuilder().addComponents(
+                new TextInputBuilder()
+                  .setCustomId('leave_reason')
+                  .setLabel('سبب الإجازة')
+                  .setStyle(TextInputStyle.Paragraph)
+                  .setPlaceholder('اكتب السبب بالتفصيل')
+                  .setRequired(true)
+                  .setMaxLength(500)
+              )
+            );
+          await interaction.showModal(modal);
+        } catch (err) {
+          console.error('❌ فشل عرض مودال الإجازة:', err);
+          await interaction.reply({ content: '❌ حدث خطأ أثناء فتح نموذج الإجازة، حاول مجدداً.', ephemeral: true }).catch(() => null);
+        }
         return;
       }
 
+      // طلب استقالة
       if (interaction.customId === 'open_resign_modal') {
-        const modal = new ModalBuilder()
-          .setCustomId('resign_modal')
-          .setTitle('📝 طلب استقالة')
-          .addComponents(
-            new ActionRowBuilder().addComponents(
-              new TextInputBuilder()
-                .setCustomId('resign_reason')
-                .setLabel('سبب الاستقالة')
-                .setStyle(TextInputStyle.Paragraph)
-                .setPlaceholder('اكتب السبب بالتفصيل')
-                .setRequired(true)
-                .setMaxLength(500)
-            )
-          );
-        await interaction.showModal(modal);
+        try {
+          const modal = new ModalBuilder()
+            .setCustomId('resign_modal')
+            .setTitle('📝 طلب استقالة')
+            .addComponents(
+              new ActionRowBuilder().addComponents(
+                new TextInputBuilder()
+                  .setCustomId('resign_reason')
+                  .setLabel('سبب الاستقالة')
+                  .setStyle(TextInputStyle.Paragraph)
+                  .setPlaceholder('اكتب السبب بالتفصيل')
+                  .setRequired(true)
+                  .setMaxLength(500)
+              )
+            );
+          await interaction.showModal(modal);
+        } catch (err) {
+          console.error('❌ فشل عرض مودال الاستقالة:', err);
+          await interaction.reply({ content: '❌ حدث خطأ أثناء فتح نموذج الاستقالة، حاول مجدداً.', ephemeral: true }).catch(() => null);
+        }
         return;
       }
 
+      // طلب كسر إجازة
       if (interaction.customId === 'open_break_modal') {
-        const modal = new ModalBuilder()
-          .setCustomId('break_modal')
-          .setTitle('🔓 طلب كسر إجازة')
-          .addComponents(
-            new ActionRowBuilder().addComponents(
-              new TextInputBuilder()
-                .setCustomId('break_reason')
-                .setLabel('سبب كسر الإجازة')
-                .setStyle(TextInputStyle.Paragraph)
-                .setPlaceholder('اكتب السبب بالتفصيل')
-                .setRequired(true)
-                .setMaxLength(500)
-            )
-          );
-        await interaction.showModal(modal);
+        try {
+          const modal = new ModalBuilder()
+            .setCustomId('break_modal')
+            .setTitle('🔓 طلب كسر إجازة')
+            .addComponents(
+              new ActionRowBuilder().addComponents(
+                new TextInputBuilder()
+                  .setCustomId('break_reason')
+                  .setLabel('سبب كسر الإجازة')
+                  .setStyle(TextInputStyle.Paragraph)
+                  .setPlaceholder('اكتب السبب بالتفصيل')
+                  .setRequired(true)
+                  .setMaxLength(500)
+              )
+            );
+          await interaction.showModal(modal);
+        } catch (err) {
+          console.error('❌ فشل عرض مودال كسر الإجازة:', err);
+          await interaction.reply({ content: '❌ حدث خطأ أثناء فتح نموذج كسر الإجازة، حاول مجدداً.', ephemeral: true }).catch(() => null);
+        }
         return;
       }
 
+      // أزرار قبول/رفض الطلبات
       if (interaction.customId && (interaction.customId.startsWith('req_accept_') || interaction.customId.startsWith('req_reject_'))) {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ هذا الإجراء خاص بالإدارة.', ephemeral: true });
@@ -938,7 +953,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: `✅ تم إرسال اللوحة إلى <#${LEAVE_EMBED_CHANNEL_ID}>.`, ephemeral: true });
       }
 
-      // ===== الأمر المعدل active_leaves =====
+      // ===== الأمر active_leaves =====
       if (interaction.commandName === 'active_leaves') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
@@ -1254,8 +1269,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   } catch (error) {
     console.error('❌ خطأ في التفاعل:', error);
+    // إذا كان التفاعل منتهي الصلاحية، لا نحاول الرد
+    if (error.code === 10062) {
+      console.warn('⏳ تفاعل منتهي الصلاحية (10062)');
+      return;
+    }
     if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({ content: '❌ حدث خطأ.', ephemeral: true }).catch(() => null);
+      await interaction.reply({ content: '❌ حدث خطأ غير متوقع، يرجى المحاولة مرة أخرى.', ephemeral: true }).catch(() => null);
     } else if (interaction.deferred) {
       await interaction.editReply({ content: '❌ حدث خطأ أثناء تنفيذ الأمر.' }).catch(() => null);
     }
@@ -1274,8 +1294,6 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
-// ===== تسجيل الدخول (مع تحقق إضافي) =====
-console.log('🚀 جاري محاولة تسجيل الدخول...');
 client.login(BOT_TOKEN.trim()).catch(err => {
   console.error('❌ فشل تسجيل الدخول:', err);
   process.exit(1);
