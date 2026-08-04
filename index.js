@@ -45,6 +45,7 @@ db.exec(`
   );
 `);
 
+// ===== المتغيرات البيئية =====
 const {
   BOT_TOKEN,
   GUILD_ID,
@@ -52,8 +53,21 @@ const {
   ADMIN_ROLE_ID,
 } = process.env;
 
-if (!BOT_TOKEN || !GUILD_ID || !WAITING_CHANNEL_ID || !ADMIN_ROLE_ID) {
-  console.error('❌ تأكد من تعبئة جميع المتغيرات في ملف .env');
+// ===== تحقق صارم من المتغيرات الأساسية =====
+if (!BOT_TOKEN || BOT_TOKEN.trim() === '') {
+  console.error('❌ خطأ: BOT_TOKEN غير موجود أو فارغ. تأكد من تعبئته في متغيرات البيئة.');
+  process.exit(1);
+}
+if (!GUILD_ID || GUILD_ID.trim() === '') {
+  console.error('❌ خطأ: GUILD_ID غير موجود أو فارغ.');
+  process.exit(1);
+}
+if (!WAITING_CHANNEL_ID || WAITING_CHANNEL_ID.trim() === '') {
+  console.error('❌ خطأ: WAITING_CHANNEL_ID غير موجود أو فارغ.');
+  process.exit(1);
+}
+if (!ADMIN_ROLE_ID || ADMIN_ROLE_ID.trim() === '') {
+  console.error('❌ خطأ: ADMIN_ROLE_ID غير موجود أو فارغ.');
   process.exit(1);
 }
 
@@ -242,7 +256,6 @@ function ratingLabel(rating) {
   return labels[rating] || '';
 }
 
-// ===== دالة لجلب جميع الرسائل من قناة (بحد أقصى 500) =====
 async function fetchAllMessages(channelId, limit = 500) {
   const channel = client.channels.cache.get(channelId);
   if (!channel) return [];
@@ -386,6 +399,9 @@ async function sendCitizenNotification(citizenUser, adminUser) {
 }
 
 async function tryPullForAllFreeAdmins(guild) {
+  // تحقق من وجود guild و client
+  if (!guild || !client) return;
+
   const waitingData = getNextEligibleWaitingMember(guild);
   if (!waitingData) return;
 
@@ -460,7 +476,12 @@ async function tryPullForAllFreeAdmins(guild) {
 
     console.log(`✅ تم سحب ${candidate.user.tag} إلى ${adminMember.user.tag}`);
   } catch (err) {
-    console.error(`⚠️ فشل سحب ${candidate.user.tag}:`, err.message);
+    // تجاهل أخطاء التوكن لأن البوت قد يكون غير جاهز
+    if (err.message && err.message.includes('token')) {
+      console.warn('⚠️ تجاهل خطأ سحب بسبب مشكلة توكن (ربما البوت لم يسجل الدخول بعد)');
+    } else {
+      console.error(`⚠️ فشل سحب ${candidate.user.tag}:`, err.message);
+    }
   }
 }
 
@@ -591,7 +612,11 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           const entry = waitingTimers.get(userId);
           if (entry) entry.sent = true;
         } catch (err) {
-          console.error('❌ خطأ في تنبيه الانتظار:', err);
+          if (err.message && err.message.includes('token')) {
+            console.warn('⚠️ تجاهل خطأ تنبيه الانتظار بسبب مشكلة توكن');
+          } else {
+            console.error('❌ خطأ في تنبيه الانتظار:', err);
+          }
         }
       }, WAITING_TIMEOUT_MS);
 
@@ -614,7 +639,11 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
       try {
         await tryPullForAllFreeAdmins(guild);
       } catch (err) {
-        console.error('❌ خطأ في السحب (enteredWaiting):', err);
+        if (err.message && err.message.includes('token')) {
+          console.warn('⚠️ تجاهل خطأ سحب (enteredWaiting) بسبب مشكلة توكن');
+        } else {
+          console.error('❌ خطأ في السحب (enteredWaiting):', err);
+        }
       }
     }
   }
@@ -622,7 +651,11 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   try {
     await tryPullForAllFreeAdmins(guild);
   } catch (err) {
-    console.error('خطأ في السحب:', err);
+    if (err.message && err.message.includes('token')) {
+      console.warn('⚠️ تجاهل خطأ سحب عام بسبب مشكلة توكن');
+    } else {
+      console.error('خطأ في السحب:', err);
+    }
   }
 });
 
@@ -926,7 +959,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.editReply({ content: '🌴 لا يوجد أعضاء لديهم رتبة الإجازة حالياً.' });
         }
 
-        // جلب رسائل قناة الطلبات
         let messages = [];
         try {
           messages = await fetchAllMessages(LEAVE_PANEL_CHANNEL_ID, 500);
@@ -935,7 +967,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.editReply({ content: '❌ حدث خطأ أثناء جلب رسائل القناة.' });
         }
 
-        // بناء خريطة لأحدث طلب مقبول لكل عضو
         const acceptedLeaveMap = new Map();
         for (const msg of messages) {
           if (msg.embeds.length === 0) continue;
@@ -962,7 +993,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }
         }
 
-        // بناء القائمة
         let lines = [];
         let index = 1;
         let anyActive = false;
@@ -998,7 +1028,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const header = '📋 قائمة الإجازات النشطة (حسب الرتبة)\n\n';
         const fullText = header + lines.join('\n');
 
-        // تقسيم النص إلى أجزاء ≤ 2000 حرف
         const MAX_LENGTH = 2000;
         let parts = [];
         let currentPart = '';
@@ -1012,7 +1041,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
         if (currentPart) parts.push(currentPart);
 
-        // إرسال الردود
         await interaction.editReply({ content: parts[0] });
         for (let i = 1; i < parts.length; i++) {
           await interaction.followUp({ content: parts[i] });
@@ -1246,4 +1274,9 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
-client.login(BOT_TOKEN);
+// ===== تسجيل الدخول (مع تحقق إضافي) =====
+console.log('🚀 جاري محاولة تسجيل الدخول...');
+client.login(BOT_TOKEN.trim()).catch(err => {
+  console.error('❌ فشل تسجيل الدخول:', err);
+  process.exit(1);
+});
