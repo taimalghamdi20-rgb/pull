@@ -1206,7 +1206,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setTitle('Admins Login - Logout')
           .setDescription(`• Login : تسجيل دخول\n• Logout : تسجيل خروج`)
           .setColor(0x2b2d31)
-          .setImage(`attachment://${HM_BANNER_FILENAME}`)
           .setFooter({ text: 'First Town by Kaspier' })
           .setTimestamp();
 
@@ -1215,10 +1214,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
           new ButtonBuilder().setCustomId('hm_check_out').setLabel('OUT').setStyle(ButtonStyle.Danger)
         );
 
-        const hmFile = new AttachmentBuilder(HM_BANNER_PATH, { name: HM_BANNER_FILENAME });
-        const hmChannel = await interaction.guild.channels.fetch(HM_PANEL_CHANNEL_ID);
-        await hmChannel.send({ embeds: [hmEmbed], components: [hmRow], files: [hmFile] });
-        return interaction.reply({ content: `✅ تم إرسال لوحة تسجيل الدخول/الخروج إلى <#${HM_PANEL_CHANNEL_ID}>.`, ephemeral: true });
+        // ✅ نتأكد أن ملف البنر موجود فعلياً قبل محاولة إرفاقه، حتى لا يكسر الأمر إذا كان الملف مفقود على السيرفر
+        const hmFiles = [];
+        if (fs.existsSync(HM_BANNER_PATH)) {
+          hmFiles.push(new AttachmentBuilder(HM_BANNER_PATH, { name: HM_BANNER_FILENAME }));
+          hmEmbed.setImage(`attachment://${HM_BANNER_FILENAME}`);
+        } else {
+          console.error(`⚠️ ملف البنر غير موجود على السيرفر: ${HM_BANNER_PATH} — سيتم إرسال اللوحة بدون صورة.`);
+        }
+
+        try {
+          const hmChannel = await interaction.guild.channels.fetch(HM_PANEL_CHANNEL_ID);
+          await hmChannel.send({ embeds: [hmEmbed], components: [hmRow], files: hmFiles });
+          return interaction.reply({ content: `✅ تم إرسال لوحة تسجيل الدخول/الخروج إلى <#${HM_PANEL_CHANNEL_ID}>.`, ephemeral: true });
+        } catch (err) {
+          console.error('❌ خطأ في إرسال لوحة تسجيل الدخول/الخروج:', err);
+          return interaction.reply({ content: '❌ حدث خطأ أثناء إرسال اللوحة. تأكد من صلاحيات البوت في الروم.', ephemeral: true });
+        }
       }
 
       // ✅ أمر /privacy
