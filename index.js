@@ -175,7 +175,6 @@ function hasBarrenRole(member) {
   return member.roles.cache.has(BARREN_ROLE_ID);
 }
 
-// ===== دوال قاعدة البيانات =====
 function loadActiveLeaves() {
   const stmt = db.prepare('SELECT user_id, end_date FROM active_leaves');
   const rows = stmt.all();
@@ -243,7 +242,7 @@ function ratingLabel(rating) {
   return labels[rating] || '';
 }
 
-// ===== دالة لجلب جميع الرسائل من قناة (بدون حد زمني) ====
+// ===== دالة لجلب جميع الرسائل من قناة (بحد أقصى 500) =====
 async function fetchAllMessages(channelId, limit = 500) {
   const channel = client.channels.cache.get(channelId);
   if (!channel) return [];
@@ -258,7 +257,7 @@ async function fetchAllMessages(channelId, limit = 500) {
     messages.push(...msgs.values());
     lastId = msgs.last().id;
     fetched += msgs.size;
-    if (msgs.size < 100) break; // لا توجد رسائل أكثر
+    if (msgs.size < 100) break;
   }
   return messages;
 }
@@ -906,7 +905,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: `✅ تم إرسال اللوحة إلى <#${LEAVE_EMBED_CHANNEL_ID}>.`, ephemeral: true });
       }
 
-      // ===== الأمر المعدل active_leaves (يعتمد على رسائل القناة) =====
+      // ===== الأمر المعدل active_leaves =====
       if (interaction.commandName === 'active_leaves') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
@@ -914,7 +913,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         await interaction.deferReply({ ephemeral: true });
 
-        // 1. جلب الأعضاء الحاصلين على رتبة الإجازة
         const leaveRoleId = LEAVE_ROLE_ID;
         let membersWithLeave;
         try {
@@ -928,13 +926,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.editReply({ content: '🌴 لا يوجد أعضاء لديهم رتبة الإجازة حالياً.' });
         }
 
-        // 2. جلب رسائل قناة الطلبات (بحد أقصى 500، مع التكرار لتفادي حد 100)
-        const channel = client.channels.cache.get(LEAVE_PANEL_CHANNEL_ID);
-        if (!channel) {
-          return interaction.editReply({ content: '❌ قناة الطلبات غير موجودة.' });
-        }
-
-        let messages;
+        // جلب رسائل قناة الطلبات
+        let messages = [];
         try {
           messages = await fetchAllMessages(LEAVE_PANEL_CHANNEL_ID, 500);
         } catch (err) {
@@ -942,9 +935,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.editReply({ content: '❌ حدث خطأ أثناء جلب رسائل القناة.' });
         }
 
-        // 3. بناء خريطة لأحدث طلب إجازة مقبول لكل عضو
+        // بناء خريطة لأحدث طلب مقبول لكل عضو
         const acceptedLeaveMap = new Map();
-
         for (const msg of messages) {
           if (msg.embeds.length === 0) continue;
           const embed = msg.embeds[0];
@@ -952,18 +944,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const fields = embed.fields || [];
           const statusField = fields.find(f => f.name.includes('الحالة'));
           if (!statusField || !statusField.value.includes('تم القبول')) continue;
-
           const description = embed.description || '';
           const match = description.match(/<@!?(\d+)>/);
           if (!match) continue;
           const userId = match[1];
-
           const durationField = fields.find(f => f.name.includes('المدة'));
           if (!durationField) continue;
           const durationMatch = durationField.value.match(/\d+/);
           if (!durationMatch) continue;
           const days = parseInt(durationMatch[0]);
-
           const existing = acceptedLeaveMap.get(userId);
           if (!existing || msg.createdTimestamp > existing.acceptedTimestamp) {
             acceptedLeaveMap.set(userId, {
@@ -973,15 +962,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }
         }
 
-        // 4. بناء القائمة النهائية
-        let desc = '';
+        // بناء القائمة
+        let lines = [];
         let index = 1;
         let anyActive = false;
-
         for (const [userId, member] of membersWithLeave) {
           const leaveInfo = acceptedLeaveMap.get(userId);
           let statusText = '';
-
           if (leaveInfo) {
             const endDate = leaveInfo.acceptedTimestamp + (leaveInfo.durationDays * 24 * 60 * 60 * 1000);
             const remaining = endDate - Date.now();
@@ -990,29 +977,47 @@ client.on(Events.InteractionCreate, async (interaction) => {
             } else {
               const days = Math.floor(remaining / (1000 * 60 * 60 * 24));
               const hours = Math.floor((remaining % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-              statusText = `⏳ متبقي: \`${days} يوم و ${hours} ساعة\``;
+              statusText = `⏳ متبقي: ${days} يوم و ${hours} ساعة`;
               anyActive = true;
             }
           } else {
             statusText = '❓ غير مسجل (لا يوجد طلب إجازة مقبول)';
           }
-
-          desc += `**${index}.** <@${userId}> — ${statusText}\n`;
+          lines.push(`**${index}.** <@${userId}> — ${statusText}`);
           index++;
         }
 
-        if (!desc) desc = 'لا يوجد بيانات.';
-        if (!anyActive && membersWithLeave.size > 0) {
-          desc += '\n⚠️ جميع الإجازات منتهية أو غير مسجلة.';
+        if (lines.length === 0) {
+          return interaction.editReply({ content: 'لا توجد بيانات.' });
         }
 
-        const embed = new EmbedBuilder()
-          .setTitle('📋 قائمة الإجازات النشطة (حسب الرتبة)')
-          .setColor(0x3ba55d)
-          .setDescription(desc)
-          .setTimestamp();
+        if (!anyActive) {
+          lines.push('\n⚠️ جميع الإجازات منتهية أو غير مسجلة.');
+        }
 
-        return interaction.editReply({ embeds: [embed] });
+        const header = '📋 قائمة الإجازات النشطة (حسب الرتبة)\n\n';
+        const fullText = header + lines.join('\n');
+
+        // تقسيم النص إلى أجزاء ≤ 2000 حرف
+        const MAX_LENGTH = 2000;
+        let parts = [];
+        let currentPart = '';
+        const allLines = fullText.split('\n');
+        for (const line of allLines) {
+          if ((currentPart + line + '\n').length > MAX_LENGTH) {
+            parts.push(currentPart);
+            currentPart = '';
+          }
+          currentPart += (currentPart ? '\n' : '') + line;
+        }
+        if (currentPart) parts.push(currentPart);
+
+        // إرسال الردود
+        await interaction.editReply({ content: parts[0] });
+        for (let i = 1; i < parts.length; i++) {
+          await interaction.followUp({ content: parts[i] });
+        }
+        return;
       }
 
       // ===== أمر barren =====
