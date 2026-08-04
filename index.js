@@ -3,8 +3,6 @@ const path = require('path');
 const http = require('http');
 
 // ===== سيرفر HTTP وهمي لإبقاء Render راضي على أنها Web Service شغالة =====
-// Render يفحص عن بورت مفتوح، وبوت الديسكورد أصلاً ما يحتاج بورت،
-// فهذا السيرفر البسيط يفتح فقط عشان يمر فحص Render (Port Scan) بدون أي وظيفة فعلية.
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -13,7 +11,7 @@ http.createServer((req, res) => {
   console.log(`🌐 سيرفر HTTP الوهمي شغال على بورت ${PORT}`);
 });
 
-// ===== حماية عامة من الأخطاء غير الملتقطة (تمنع تعليق/طيحان البوت المفاجئ) =====
+// ===== حماية عامة من الأخطاء غير الملتقطة =====
 process.on('unhandledRejection', (reason) => {
   console.error('⚠️ Unhandled Rejection:', reason);
 });
@@ -39,7 +37,6 @@ const {
 const Database = require('better-sqlite3');
 const db = new Database('data.db');
 
-// ===== إنشاء الجداول =====
 db.exec(`
   CREATE TABLE IF NOT EXISTS active_leaves (
     user_id TEXT PRIMARY KEY,
@@ -108,14 +105,10 @@ const WAITING_ROOM_ADMIN_MAP = {
   ]
 };
 
-// ===== خريطة روم الانتظار -> الرتبة المطلوبة للإداري =====
 const WAITING_ROOM_REQUIRED_ROLE = {
   '1483285123008041031': '1486587636863864862'
 };
 
-// ===== حالة خاصة: رتبة معينة داخل روم انتظار معين =====
-// أي عضو يدخل SPECIAL_WAITING_ROOM_ID ومعه SPECIAL_ROLE_ID
-// يُسحب فقط لرومات SPECIAL_ADMIN_ROOM_IDS، ويشترط بالإداري رتبة SPECIAL_REQUIRED_ADMIN_ROLE_ID
 const SPECIAL_ROLE_ID = '1476796533168017428';
 const SPECIAL_WAITING_ROOM_ID = '1519511668823167116';
 const SPECIAL_ADMIN_ROOM_IDS = [
@@ -139,7 +132,6 @@ const LEAVE_ROLE_ID = '1459304469127758027';
 const RESIGNATION_KEEP_ROLE_ID = '1476796533168017428';
 const STAFF_ROLE_IDS = ['1459304407899443396', '1459304410923532481'];
 
-// ===== الرتب اللي تُمنشن مع كل طلب إجازة/استقالة/كسر إجازة يوصل لروم المراجعة =====
 const LEAVE_REQUEST_MENTION_ROLE_IDS = ['1459304407899443396', '1459304410923532481'];
 
 const WAITING_NOTIFICATION_CHANNEL_ID = '1530276832203636737';
@@ -165,10 +157,8 @@ const RATING_CHANNEL_ID = '1531018869764788446';
 const DONE_VOICE_CHANNEL_ID = '1499086608010449089';
 const BARREN_ROLE_ID = '1486588170282733700';
 
-// ===== قناة الترقيات (لاستخراج تاريخ آخر ترقية لكل إداري) =====
 const PROMOTION_CHANNEL_ID = '1459305425857155308';
 
-// ===== قائمة الرتب الإدارية المسموح بعرضها في الجرد (بالترتيب المطلوب) =====
 const ALLOWED_ROLE_IDS = [
   '1499162553245499432',
   '1480102405931667467',
@@ -219,10 +209,8 @@ function markSessionEvaluated(sessionId) {
   stmt.run(sessionId);
 }
 
-// ===== تحميل البيانات =====
 const activeLeaves = loadActiveLeaves();
 
-// ===== دوال مساعدة =====
 const MAX_LEAVE_DAYS = 14;
 const LEAVE_PANEL_COLOR = 0xC2410C;
 const LEAVE_BANNER_PATH = path.join(__dirname, 'leave_banner.png');
@@ -240,14 +228,10 @@ const client = new Client({
   ],
 });
 
-// ===== حالة الجلسات النشطة والكول داون =====
 const activeSessions = new Map();
 const cooldownMap = new Map();
 const waitingTimers = new Map();
 
-// ============================================================
-// دوال التقييم
-// ============================================================
 function ratingStarsBar(rating) {
   const filled = '⭐'.repeat(rating);
   const empty = '☆'.repeat(5 - rating);
@@ -265,9 +249,6 @@ function ratingLabel(rating) {
   return labels[rating] || '';
 }
 
-// ============================================================
-// دوال جلب الإحصائيات (لأمر barren) - مع دعم تاريخ الترقية
-// ============================================================
 async function fetchMessagesFromDate(channelId, fromDate) {
   try {
     const channel = client.channels.cache.get(channelId);
@@ -294,7 +275,6 @@ async function fetchMessagesFromDate(channelId, fromDate) {
   }
 }
 
-// دالة لاستخراج آخر تاريخ ترقية لكل إداري من قناة الترقيات
 async function getLastPromotionDate(guild) {
   const promotionChannel = client.channels.cache.get(PROMOTION_CHANNEL_ID);
   if (!promotionChannel) {
@@ -306,18 +286,15 @@ async function getLastPromotionDate(guild) {
   let lastId = null;
   let fetched = 0;
   const limit = 1000;
-  // نبحث في آخر 1000 رسالة (عادةً تكفي لآخر شهرين من الترقيات)
   while (fetched < limit) {
     const options = { limit: 100 };
     if (lastId) options.before = lastId;
     const msgs = await promotionChannel.messages.fetch(options);
     if (msgs.size === 0) break;
     for (const [, msg] of msgs) {
-      // نبحث عن منشن عضو في الرسالة
       const match = msg.content.match(/<@!?(\d+)>/);
       if (match) {
         const userId = match[1];
-        // إذا لم يكن لدينا تاريخ لهذا المستخدم من قبل، نخزن التاريخ (أحدث ترقية تكون أول ظهور)
         if (!lastPromotionMap.has(userId)) {
           lastPromotionMap.set(userId, msg.createdTimestamp);
         }
@@ -325,15 +302,11 @@ async function getLastPromotionDate(guild) {
     }
     lastId = msgs.last().id;
     fetched += msgs.size;
-    if (msgs.size < 100) break; // إذا وصلنا لنهاية القناة
+    if (msgs.size < 100) break;
   }
-
   return lastPromotionMap;
 }
 
-// ============================================================
-// حماية روم الإجازات
-// ============================================================
 client.on(Events.MessageCreate, async (message) => {
   if (message.guild && message.channelId === LEAVE_EMBED_CHANNEL_ID) {
     if (message.author.bot) return;
@@ -344,9 +317,6 @@ client.on(Events.MessageCreate, async (message) => {
   }
 });
 
-// ============================================================
-// دوال السحب التلقائي المباشر
-// ============================================================
 function isDeafened(voiceState) {
   if (!voiceState) return false;
   return voiceState.selfDeaf || voiceState.serverDeaf;
@@ -373,7 +343,6 @@ function isFreeAdminRoom(channel, targetAdminRoomIds, requiredRoleId = null) {
   const adminMember = members[0];
   if (requiredRoleId && !adminMember.roles.cache.has(requiredRoleId)) return false;
   if (!adminMember.roles.cache.has(ADMIN_ROLE_ID)) return false;
-  // ✅ تم تصحيح الشرط هنا: الإداري المتفرغ هو الذي لم يقم بـ Deafen
   return !isDeafened(adminMember.voice);
 }
 
@@ -412,7 +381,6 @@ async function tryPullForAllFreeAdmins(guild) {
   let targetAdminRoomIds;
   let requiredRoleId;
 
-  // ===== الحالة الخاصة: روم انتظار معين + رتبة معينة عند المواطن =====
   const isSpecialCase =
     waitingChannelId === SPECIAL_WAITING_ROOM_ID &&
     candidate.roles.cache.has(SPECIAL_ROLE_ID);
@@ -442,14 +410,11 @@ async function tryPullForAllFreeAdmins(guild) {
   if (activeSessions.has(candidate.id)) return;
 
   const eligibleAdmins = freeAdmins.filter(({ adminMember }) => {
-    // ✅ فحص كول داون 15 ثانية للإداري (لمنع سحب مواطن ثانٍ له مباشرة)
     const adminCooldownKey = adminMember.id;
     const adminCooldownEnd = cooldownMap.get(adminCooldownKey);
     if (adminCooldownEnd && adminCooldownEnd > Date.now()) {
       return false;
     }
-
-    // فحص كول داون 60 ثانية للزوج (إداري + مواطن)
     const pairKey = `${adminMember.id}_${candidate.id}`;
     const pairCooldownEnd = cooldownMap.get(pairKey);
     if (pairCooldownEnd && pairCooldownEnd > Date.now()) {
@@ -476,7 +441,6 @@ async function tryPullForAllFreeAdmins(guild) {
       startTime: Date.now()
     });
 
-    // ✅ تعيين كول داون 15 ثانية للإداري بعد سحب المواطن له
     cooldownMap.set(adminMember.id, Date.now() + 15 * 1000);
 
     await sendCitizenNotification(candidate.user, adminMember.user);
@@ -487,9 +451,6 @@ async function tryPullForAllFreeAdmins(guild) {
   }
 }
 
-// ============================================================
-// دالة إنهاء الجلسة مع إرسال تقييم
-// ============================================================
 async function endSession(guild, citizenId, adminId, startTime) {
   const durationSec = Math.floor((Date.now() - startTime) / 1000);
   const minutes = Math.floor(durationSec / 60);
@@ -538,9 +499,6 @@ async function endSession(guild, citizenId, adminId, startTime) {
   }
 }
 
-// ============================================================
-// تسجيل الأوامر
-// ============================================================
 client.once(Events.ClientReady, async (c) => {
   console.log(`🤖 البوت شغال باسم ${c.user.tag}`);
   try {
@@ -557,9 +515,6 @@ client.once(Events.ClientReady, async (c) => {
   }
 });
 
-// ============================================================
-// أحداث الصوت
-// ============================================================
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const guild = newState.guild || oldState.guild;
   if (!guild || guild.id !== GUILD_ID) return;
@@ -658,9 +613,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   }
 });
 
-// ============================================================
-// معالج التفاعلات (الإجازات + التقييم + barren)
-// ============================================================
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     // ===== أزرار التقييم =====
@@ -942,23 +894,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       // ===== الأمر المعدل active_leaves =====
       if (interaction.commandName === 'active_leaves') {
+        // التحقق من الصلاحية
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
         }
 
-        // جلب جميع الأعضاء للتأكد من تحديث الكاش
-        await interaction.guild.members.fetch({ withPresences: false, force: true });
+        // تأكيد استلام التفاعل لتجنب انتهاء صلاحيته
+        await interaction.deferReply({ ephemeral: true });
 
-        const leaveRoleId = LEAVE_ROLE_ID; // 1459304469127758027
-        const membersWithLeave = interaction.guild.members.cache.filter(m =>
-          m.roles.cache.has(leaveRoleId)
-        );
+        // الحصول على الرتبة من الكاش مباشرةً (لا حاجة لجلب الأعضاء)
+        const leaveRole = interaction.guild.roles.cache.get(LEAVE_ROLE_ID);
+        if (!leaveRole) {
+          return interaction.editReply({ content: '❌ رتبة الإجازة غير موجودة.' });
+        }
 
+        // استخدام role.members (وهو كاش الأعضاء الذين لديهم الرتبة)
+        const membersWithLeave = leaveRole.members;
         if (membersWithLeave.size === 0) {
-          return interaction.reply({
-            content: '🌴 لا يوجد أعضاء لديهم رتبة الإجازة حالياً.',
-            ephemeral: true
-          });
+          return interaction.editReply({ content: '🌴 لا يوجد أعضاء لديهم رتبة الإجازة حالياً.' });
         }
 
         let desc = '';
@@ -1002,10 +955,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setDescription(desc)
           .setTimestamp();
 
-        return interaction.reply({ embeds: [embed] });
+        return interaction.editReply({ embeds: [embed] });
       }
 
-      // ===== أمر barren (متاح فقط لرتبة BARREN_ROLE_ID) =====
+      // ===== أمر barren =====
       if (interaction.commandName === 'barren') {
         if (!hasBarrenRole(interaction.member)) {
           return interaction.reply({ 
@@ -1033,7 +986,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
         console.log(`✅ تم العثور على الرتبة: "${role.name}" (${role.id})`);
 
-        // استخدام role.members للحصول على العدد الصحيح
         const members = role.members;
         console.log(`📊 عدد الأعضاء في role.members: ${members.size}`);
 
@@ -1041,19 +993,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.editReply({ content: '❌ لا يوجد أعضاء في فريق التفعيل.' });
         }
 
-        // جلب آخر تاريخ ترقية لكل إداري
         console.log('🔄 جاري جلب تواريخ آخر ترقية لكل إداري من قناة الترقيات...');
         const lastPromotionMap = await getLastPromotionDate(guild);
         console.log(`✅ تم جلب تواريخ الترقية لـ ${lastPromotionMap.size} إداري.`);
 
-        // قنوات الإحصائيات
         const activateChannel = '1484859915200626829';
         const rejectChannel = '1484865429158756494';
         const reactivateChannel = '1493565275428225125';
 
-        // جلب الرسائل من القنوات - سنقوم بجلبها لكل إداري حسب تاريخ ترقيته
-        // ولكن لتحسين الأداء، نجلب جميع الرسائل من القنوات (آخر 30 يوم) ثم نفلتر حسب التاريخ لكل إداري
-        const days = 30; // نأخذ 30 يوم للاحتياط
+        const days = 30;
         const [activateMsgs, rejectMsgs, reactivateMsgs] = await Promise.all([
           fetchMessagesFromDate(activateChannel, Date.now() - days * 24 * 60 * 60 * 1000),
           fetchMessagesFromDate(rejectChannel, Date.now() - days * 24 * 60 * 60 * 1000),
@@ -1064,14 +1012,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         console.log(`📊 عدد رسائل الرفض: ${rejectMsgs.length}`);
         console.log(`📊 عدد رسائل إعادة التفعيل: ${reactivateMsgs.length}`);
 
-        // حساب الإحصائيات لكل عضو بناءً على تاريخ ترقيته
         const stats = [];
         for (const [id, member] of members) {
-          // الحصول على تاريخ آخر ترقية لهذا العضو
-          const promotionDate = lastPromotionMap.get(id) || Date.now() - 7 * 24 * 60 * 60 * 1000; // إذا لم يوجد، نأخذ آخر 7 أيام
+          const promotionDate = lastPromotionMap.get(id) || Date.now() - 7 * 24 * 60 * 60 * 1000;
           console.log(`   ⏰ ${member.user.tag} آخر ترقية: ${new Date(promotionDate).toLocaleDateString('ar-SA')}`);
 
-          // تصفية الرسائل التي تمت بعد تاريخ الترقية
           const activates = activateMsgs.filter(msg => 
             msg.createdTimestamp >= promotionDate && msg.content.includes(`<@${id}>`)
           ).length;
@@ -1082,7 +1027,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             msg.createdTimestamp >= promotionDate && msg.content.includes(`<@${id}>`)
           ).length;
 
-          // ✅ ترتيب الرتب حسب ترتيب ALLOWED_ROLE_IDS بدلاً من ترتيب عشوائي من روم كاش العضو
           const roleMentions = ALLOWED_ROLE_IDS
             .filter(roleId => member.roles.cache.has(roleId))
             .map(roleId => `<@&${roleId}>`)
@@ -1100,7 +1044,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         stats.sort((a, b) => b.activates - a.activates);
 
-        // بناء النص الأساسي
         let bodyText = '';
         for (const stat of stats) {
           const promotionDateStr = new Date(stat.promotionDate).toLocaleDateString('ar-SA');
@@ -1117,7 +1060,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const header = `📊 جرد فريق التفعيل (منذ آخر ترقية لكل عضو)\n\n`;
         const footer = `\n**تم جرد ${totalCount} شخص.**`;
 
-        // تقسيم النص
         const MAX_MSG_LENGTH = 2000;
         const fullText = header + bodyText + footer;
 
@@ -1142,7 +1084,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
           console.log(`📊 عدد الأجزاء: ${parts.length}`);
 
-          const totalParts = parts.length;
           const logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
 
           for (let i = 0; i < parts.length; i++) {
@@ -1156,7 +1097,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             }
 
             if (content.length > MAX_MSG_LENGTH) {
-              // تقسيم إضافي إذا لزم الأمر
               const subParts = [];
               let sub = '';
               const subLines = content.split('\n');
@@ -1202,7 +1142,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         console.log('==============================================================\n');
       }
 
-      // ✅ أمر /privacy
+      // أمر privacy
       if (interaction.commandName === 'privacy') {
         const privacyUrl = process.env.PRIVACY_POLICY_URL;
 
@@ -1232,9 +1172,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-// ============================================================
-// حفظ البيانات عند الإغلاق
-// ============================================================
 process.on('SIGINT', () => {
   console.log('🔄 حفظ البيانات...');
   saveActiveLeaves();
