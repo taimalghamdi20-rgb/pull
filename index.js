@@ -121,7 +121,7 @@ const SPECIAL_ADMIN_ROOM_IDS = [
 const SPECIAL_REQUIRED_ADMIN_ROLE_ID = '1499102575918579793';
 
 const LEAVE_EMBED_CHANNEL_ID = '1529495796247167178';
-const LEAVE_PANEL_CHANNEL_ID = '1529440458030321714'; // القناة التي تحتوي على طلبات الإجازات
+const LEAVE_PANEL_CHANNEL_ID = '1529440458030321714';
 const LEAVE_ROLE_ID = '1459304469127758027';
 const RESIGNATION_KEEP_ROLE_ID = '1476796533168017428';
 const STAFF_ROLE_IDS = ['1459304407899443396', '1459304410923532481'];
@@ -241,6 +241,26 @@ function ratingColor(rating) {
 function ratingLabel(rating) {
   const labels = { 1: 'ضعيف جدًا', 2: 'ضعيف', 3: 'متوسط', 4: 'جيد', 5: 'ممتاز' };
   return labels[rating] || '';
+}
+
+// ===== دالة لجلب جميع الرسائل من قناة (بدون حد زمني) ====
+async function fetchAllMessages(channelId, limit = 500) {
+  const channel = client.channels.cache.get(channelId);
+  if (!channel) return [];
+  const messages = [];
+  let lastId = null;
+  let fetched = 0;
+  while (fetched < limit) {
+    const options = { limit: Math.min(100, limit - fetched) };
+    if (lastId) options.before = lastId;
+    const msgs = await channel.messages.fetch(options);
+    if (msgs.size === 0) break;
+    messages.push(...msgs.values());
+    lastId = msgs.last().id;
+    fetched += msgs.size;
+    if (msgs.size < 100) break; // لا توجد رسائل أكثر
+  }
+  return messages;
 }
 
 async function fetchMessagesFromDate(channelId, fromDate) {
@@ -894,7 +914,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         await interaction.deferReply({ ephemeral: true });
 
-        // 1. جلب جميع الأعضاء الحاصلين على رتبة الإجازة
+        // 1. جلب الأعضاء الحاصلين على رتبة الإجازة
         const leaveRoleId = LEAVE_ROLE_ID;
         let membersWithLeave;
         try {
@@ -908,7 +928,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.editReply({ content: '🌴 لا يوجد أعضاء لديهم رتبة الإجازة حالياً.' });
         }
 
-        // 2. جلب رسائل قناة الطلبات (نأخذ آخر 1000 رسالة)
+        // 2. جلب رسائل قناة الطلبات (بحد أقصى 500، مع التكرار لتفادي حد 100)
         const channel = client.channels.cache.get(LEAVE_PANEL_CHANNEL_ID);
         if (!channel) {
           return interaction.editReply({ content: '❌ قناة الطلبات غير موجودة.' });
@@ -916,39 +936,34 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         let messages;
         try {
-          messages = await channel.messages.fetch({ limit: 1000 });
+          messages = await fetchAllMessages(LEAVE_PANEL_CHANNEL_ID, 500);
         } catch (err) {
           console.error('❌ فشل جلب رسائل القناة:', err);
           return interaction.editReply({ content: '❌ حدث خطأ أثناء جلب رسائل القناة.' });
         }
 
         // 3. بناء خريطة لأحدث طلب إجازة مقبول لكل عضو
-        const acceptedLeaveMap = new Map(); // userId -> { durationDays, acceptedTimestamp }
+        const acceptedLeaveMap = new Map();
 
-        for (const [, msg] of messages) {
-          // نبحث عن الرسائل التي تحتوي على Embed واحد على الأقل
+        for (const msg of messages) {
           if (msg.embeds.length === 0) continue;
           const embed = msg.embeds[0];
-          // نبحث عن عنوان يحتوي "طلب إجازة" وحقل "الحالة" يحتوي "تم القبول"
           if (!embed.title || !embed.title.includes('طلب إجازة')) continue;
           const fields = embed.fields || [];
           const statusField = fields.find(f => f.name.includes('الحالة'));
           if (!statusField || !statusField.value.includes('تم القبول')) continue;
 
-          // استخراج معرف المستخدم من وصف الـ Embed (صيغة "**من:** <@userId>")
           const description = embed.description || '';
           const match = description.match(/<@!?(\d+)>/);
           if (!match) continue;
           const userId = match[1];
 
-          // استخراج المدة من حقل "المدة"
           const durationField = fields.find(f => f.name.includes('المدة'));
           if (!durationField) continue;
           const durationMatch = durationField.value.match(/\d+/);
           if (!durationMatch) continue;
           const days = parseInt(durationMatch[0]);
 
-          // نتتبع فقط أحدث طلب مقبول (باستخدام تاريخ الرسالة)
           const existing = acceptedLeaveMap.get(userId);
           if (!existing || msg.createdTimestamp > existing.acceptedTimestamp) {
             acceptedLeaveMap.set(userId, {
@@ -958,7 +973,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }
         }
 
-        // 4. بناء قائمة النتائج
+        // 4. بناء القائمة النهائية
         let desc = '';
         let index = 1;
         let anyActive = false;
