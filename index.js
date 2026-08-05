@@ -1164,7 +1164,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         console.log(`📊 عدد رسائل إعادة التفعيل: ${reactivateMsgs.length}`);
 
         // حساب الإحصائيات لكل عضو بناءً على تاريخ ترقيته
-        const stats = [];
+        const statsById = new Map();
         for (const [id, member] of members) {
           // الحصول على تاريخ آخر ترقية لهذا العضو
           const promotionDate = lastPromotionMap.get(id) || Date.now() - 7 * 24 * 60 * 60 * 1000; // إذا لم يوجد، نأخذ آخر 7 أيام
@@ -1181,37 +1181,68 @@ client.on(Events.InteractionCreate, async (interaction) => {
             msg.createdTimestamp >= promotionDate && msg.content.includes(`<@${id}>`)
           ).length;
 
-          // ✅ ترتيب الرتب حسب ترتيب ALLOWED_ROLE_IDS بدلاً من ترتيب عشوائي من روم كاش العضو
-          const roleMentions = ALLOWED_ROLE_IDS
-            .filter(roleId => member.roles.cache.has(roleId))
-            .map(roleId => `<@&${roleId}>`)
-            .join(' ') || 'لا يوجد رتبة';
-
-          stats.push({ 
-            member, 
-            activates, 
-            rejects, 
-            reactivates, 
-            roleMentions,
-            promotionDate 
-          });
+          statsById.set(id, { member, activates, rejects, reactivates, promotionDate });
         }
 
-        stats.sort((a, b) => b.activates - a.activates);
+        // ✅ تجميع الأعضاء حسب رتبتهم، بنفس ترتيب ALLOWED_ROLE_IDS بالضبط (مو خليط عشوائي)
+        // كل عضو يوضع تحت أول رتبة يملكها من القائمة (حسب أولوية الترتيب المعطى)
+        const assignedIds = new Set();
+        const groupedByRole = []; // [{ roleId, roleObj, entries: [...] }]
 
-        // بناء النص الأساسي
+        for (const roleId of ALLOWED_ROLE_IDS) {
+          const roleObj = guild.roles.cache.get(roleId);
+          const entries = [];
+          for (const [id, stat] of statsById) {
+            if (assignedIds.has(id)) continue;
+            if (stat.member.roles.cache.has(roleId)) {
+              entries.push(stat);
+              assignedIds.add(id);
+            }
+          }
+          entries.sort((a, b) => b.activates - a.activates);
+          groupedByRole.push({ roleId, roleObj, entries });
+        }
+
+        // الأعضاء اللي ما عندهم أي رتبة من القائمة أعلاه (يظهرون بمجموعة منفصلة بالأخير)
+        const noRoleEntries = [];
+        for (const [id, stat] of statsById) {
+          if (!assignedIds.has(id)) noRoleEntries.push(stat);
+        }
+        noRoleEntries.sort((a, b) => b.activates - a.activates);
+
+        // بناء النص الأساسي مجمّع حسب كل رتبة بالترتيب المطلوب بالضبط
         let bodyText = '';
-        for (const stat of stats) {
-          const promotionDateStr = new Date(stat.promotionDate).toLocaleDateString('ar-SA');
-          bodyText += `<@${stat.member.id}>\n`;
-          bodyText += `**الرتب:** ${stat.roleMentions}\n`;
-          bodyText += `▪️ **تفعيل شخص:** ${stat.activates}\n`;
-          bodyText += `▪️ **رفض شخص:** ${stat.rejects}\n`;
-          bodyText += `▪️ **إعادة تفعيل شخص:** ${stat.reactivates}\n`;
-          bodyText += `▪️ **آخر ترقية:** ${promotionDateStr}\n\n`;
+        let totalCount = 0;
+
+        for (const group of groupedByRole) {
+          if (group.entries.length === 0) continue;
+          const roleLabel = group.roleObj ? group.roleObj.name : 'رتبة غير موجودة';
+          bodyText += `\n__**${roleLabel}**__ — \u200E<@&${group.roleId}>\u200E\n`;
+          bodyText += `━━━━━━━━━━━━━━━━━━\n`;
+          for (const stat of group.entries) {
+            const promotionDateStr = new Date(stat.promotionDate).toLocaleDateString('ar-SA');
+            bodyText += `\u200E<@${stat.member.id}>\u200E\n`;
+            bodyText += `▪️ **تفعيل شخص:** ${stat.activates}\n`;
+            bodyText += `▪️ **رفض شخص:** ${stat.rejects}\n`;
+            bodyText += `▪️ **إعادة تفعيل شخص:** ${stat.reactivates}\n`;
+            bodyText += `▪️ **آخر ترقية:** ${promotionDateStr}\n\n`;
+            totalCount++;
+          }
         }
 
-        const totalCount = stats.length;
+        if (noRoleEntries.length > 0) {
+          bodyText += `\n__**بدون رتبة من القائمة**__\n`;
+          bodyText += `━━━━━━━━━━━━━━━━━━\n`;
+          for (const stat of noRoleEntries) {
+            const promotionDateStr = new Date(stat.promotionDate).toLocaleDateString('ar-SA');
+            bodyText += `\u200E<@${stat.member.id}>\u200E\n`;
+            bodyText += `▪️ **تفعيل شخص:** ${stat.activates}\n`;
+            bodyText += `▪️ **رفض شخص:** ${stat.rejects}\n`;
+            bodyText += `▪️ **إعادة تفعيل شخص:** ${stat.reactivates}\n`;
+            bodyText += `▪️ **آخر ترقية:** ${promotionDateStr}\n\n`;
+            totalCount++;
+          }
+        }
 
         const header = `📊 جرد فريق التفعيل (منذ آخر ترقية لكل عضو)\n\n`;
         const footer = `\n**تم جرد ${totalCount} شخص.**`;
