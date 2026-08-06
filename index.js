@@ -33,6 +33,7 @@ const {
   TextInputBuilder,
   TextInputStyle,
   AttachmentBuilder,
+  AuditLogEvent,
 } = require('discord.js');
 
 // ===== قاعدة بيانات SQLite =====
@@ -167,6 +168,12 @@ const BARREN_ROLE_ID = '1486588170282733700';
 
 // ===== قناة الترقيات (لاستخراج تاريخ آخر ترقية لكل إداري) =====
 const PROMOTION_CHANNEL_ID = '1459305425857155308';
+
+// ===== إعداد خاص برتبة الدعم (support) =====
+// هذه الرتبة فقط تعتمد على Audit Log أو روم الدعم لمعرفة تاريخ حصولها على الرتبة،
+// أما باقي الرتب فتبقى تعتمد على قناة الترقيات العادية (بدون أي تغيير).
+const SUPPORT_ROLE_ID = '1499162553245499432';
+const SUPPORT_ROLE_LOG_CHANNEL_ID = '1459305788374782164';
 
 // ===== إعدادات لوحة تسجيل الدخول/الخروج للإدارة العليا (High Management) =====
 const HM_PANEL_CHANNEL_ID = '1534312045166592171'; // الروم الي ترسل فيه اللوحة
@@ -316,7 +323,7 @@ async function fetchMessagesFromDate(channelId, fromDate) {
   }
 }
 
-// دالة لاستخراج آخر تاريخ ترقية لكل إداري من قناة الترقيات
+// دالة لاستخراج آخر تاريخ ترقية لكل إداري من قناة الترقيات (بدون أي تغيير - تُستخدم لباقي الرتب)
 async function getLastPromotionDate(guild) {
   const promotionChannel = client.channels.cache.get(PROMOTION_CHANNEL_ID);
   if (!promotionChannel) {
@@ -351,6 +358,91 @@ async function getLastPromotionDate(guild) {
   }
 
   return lastPromotionMap;
+}
+
+// ============================================================
+// ✅ إضافة: تحديد تاريخ الحصول على رتبة الدعم (support) فقط
+// المصدر الأول: روم سجل رتبة الدعم (SUPPORT_ROLE_LOG_CHANNEL_ID)
+// المصدر الثاني (احتياطي): Audit Log الخاص بالسيرفر (بحث عن آخر عملية إضافة للرتبة)
+// لا يؤثر هذا إطلاقاً على باقي الرتب، التي تبقى تعتمد على getLastPromotionDate كما هي.
+// ============================================================
+
+// 1) قراءة روم سجل رتبة الدعم واستخراج أول ظهور (الأحدث) لكل عضو
+async function getSupportRoleChannelDates(guild) {
+  const supportChannel = client.channels.cache.get(SUPPORT_ROLE_LOG_CHANNEL_ID);
+  if (!supportChannel) {
+    console.error('❌ روم سجل رتبة الدعم غير موجود!');
+    return new Map();
+  }
+
+  const dateMap = new Map();
+  let lastId = null;
+  let fetched = 0;
+  const limit = 1000;
+  while (fetched < limit) {
+    const options = { limit: 100 };
+    if (lastId) options.before = lastId;
+    const msgs = await supportChannel.messages.fetch(options);
+    if (msgs.size === 0) break;
+    for (const [, msg] of msgs) {
+      const match = msg.content.match(/<@!?(\d+)>/);
+      if (match) {
+        const userId = match[1];
+        // أول ظهور نبحث عنه (وإحنا نازلين من الأحدث للأقدم) هو أحدث تاريخ حصلت فيه الرتبة
+        if (!dateMap.has(userId)) {
+          dateMap.set(userId, msg.createdTimestamp);
+        }
+      }
+    }
+    lastId = msgs.last().id;
+    fetched += msgs.size;
+    if (msgs.size < 100) break;
+  }
+
+  return dateMap;
+}
+
+// 2) البحث في Audit Log عن آخر عملية إضافة لرتبة معينة لعضو معين
+async function getRoleAddDateFromAuditLog(guild, userId, roleId) {
+  try {
+    let before = undefined;
+    for (let page = 0; page < 10; page++) { // حتى 1000 حدث كحد أقصى
+      const logs = await guild.fetchAuditLogs({
+        type: AuditLogEvent.MemberRoleUpdate,
+        limit: 100,
+        before,
+      });
+      if (!logs.entries.size) break;
+
+      for (const [, entry] of logs.entries) {
+        if (!entry.target || entry.target.id !== userId) continue;
+        const addChange = entry.changes && entry.changes.find(
+          (c) => c.key === '$add' && Array.isArray(c.new) && c.new.some((r) => r.id === roleId)
+        );
+        if (addChange) {
+          return entry.createdTimestamp;
+        }
+      }
+
+      const lastEntry = logs.entries.last();
+      if (!lastEntry) break;
+      before = lastEntry.id;
+      if (logs.entries.size < 100) break;
+    }
+  } catch (err) {
+    console.error(`❌ خطأ في جلب سجل التدقيق للعضو ${userId}:`, err);
+  }
+  return null;
+}
+
+// 3) دالة موحّدة: تحدد تاريخ حصول عضو على رتبة الدعم (روم السجل ثم Audit Log كاحتياطي)
+async function resolveSupportRoleDate(guild, userId, supportChannelDateMap) {
+  if (supportChannelDateMap.has(userId)) {
+    return supportChannelDateMap.get(userId);
+  }
+  const auditDate = await getRoleAddDateFromAuditLog(guild, userId, SUPPORT_ROLE_ID);
+  if (auditDate) return auditDate;
+  return null; // لم يتم العثور على تاريخ، سيتم استخدام القيمة الافتراضية لاحقاً
 }
 
 // ============================================================
@@ -1140,10 +1232,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.editReply({ content: '❌ لا يوجد أعضاء في فريق التفعيل.' });
         }
 
-        // جلب آخر تاريخ ترقية لكل إداري
+        // جلب آخر تاريخ ترقية لكل إداري (يبقى كما هو لباقي الرتب)
         console.log('🔄 جاري جلب تواريخ آخر ترقية لكل إداري من قناة الترقيات...');
         const lastPromotionMap = await getLastPromotionDate(guild);
         console.log(`✅ تم جلب تواريخ الترقية لـ ${lastPromotionMap.size} إداري.`);
+
+        // ✅ جلب تواريخ رتبة الدعم من روم السجل الخاص بها (يُستخدم فقط لرتبة SUPPORT_ROLE_ID)
+        console.log('🔄 جاري جلب تواريخ رتبة الدعم من روم السجل...');
+        const supportRoleChannelDateMap = await getSupportRoleChannelDates(guild);
+        console.log(`✅ تم جلب تواريخ رتبة الدعم لـ ${supportRoleChannelDateMap.size} إداري من الروم.`);
 
         // قنوات الإحصائيات
         const activateChannel = '1484859915200626829';
@@ -1166,8 +1263,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
         // حساب الإحصائيات لكل عضو بناءً على تاريخ ترقيته
         const statsById = new Map();
         for (const [id, member] of members) {
-          // الحصول على تاريخ آخر ترقية لهذا العضو
-          const promotionDate = lastPromotionMap.get(id) || Date.now() - 7 * 24 * 60 * 60 * 1000; // إذا لم يوجد، نأخذ آخر 7 أيام
+          // ✅ تحديد تاريخ البداية: رتبة الدعم تعتمد على روم سجلها ثم Audit Log كاحتياطي،
+          // أما باقي الرتب فتبقى كما هي بدون أي تغيير (قناة الترقيات العادية).
+          let promotionDate;
+          if (member.roles.cache.has(SUPPORT_ROLE_ID)) {
+            promotionDate = await resolveSupportRoleDate(guild, id, supportRoleChannelDateMap);
+            if (!promotionDate) {
+              // احتياط أخير إذا ما وُجد شيء في الروم ولا في Audit Log
+              promotionDate = lastPromotionMap.get(id) || Date.now() - 7 * 24 * 60 * 60 * 1000;
+            }
+          } else {
+            promotionDate = lastPromotionMap.get(id) || Date.now() - 7 * 24 * 60 * 60 * 1000; // إذا لم يوجد، نأخذ آخر 7 أيام
+          }
           console.log(`   ⏰ ${member.user.tag} آخر ترقية: ${new Date(promotionDate).toLocaleDateString('ar-SA')}`);
 
           // تصفية الرسائل التي تمت بعد تاريخ الترقية
