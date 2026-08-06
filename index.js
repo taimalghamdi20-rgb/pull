@@ -175,6 +175,9 @@ const PROMOTION_CHANNEL_ID = '1459305425857155308';
 const SUPPORT_ROLE_ID = '1499162553245499432';
 const SUPPORT_ROLE_LOG_CHANNEL_ID = '1459305788374782164';
 
+// ===== روم سجل ساعات كل إداري (فيه إمبد "Admin Logout" وبداخله حقل Total Time المتراكم) =====
+const HOURS_LOG_CHANNEL_ID = '1513231005815931000';
+
 // ===== إعدادات لوحة تسجيل الدخول/الخروج للإدارة العليا (High Management) =====
 const HM_PANEL_CHANNEL_ID = '1534312045166592171'; // الروم الي ترسل فيه اللوحة
 const HM_LOG_CHANNEL_ID = '1534313854329159710';   // الروم الي يوصله السجل (Log)
@@ -443,6 +446,84 @@ async function resolveSupportRoleDate(guild, userId, supportChannelDateMap) {
   const auditDate = await getRoleAddDateFromAuditLog(guild, userId, SUPPORT_ROLE_ID);
   if (auditDate) return auditDate;
   return null; // لم يتم العثور على تاريخ، سيتم استخدام القيمة الافتراضية لاحقاً
+}
+
+// ============================================================
+// ✅ إضافة: قراءة "عدد ساعات الشخص" (Total Time المتراكم) من روم سجل الساعات
+// كل رسالة عبارة عن إمبد "Admin Logout" فيه حقل Admin (منشن) وحقل Total Time (مثل "19m 58s").
+// بما أن Total Time قيمة تراكمية، فأول ظهور لكل عضو ونحن نازلين من الأحدث للأقدم
+// هو آخر/أكبر قيمة متراكمة له، فنكتفي به ونتجاهل الباقي لنفس العضو.
+// ============================================================
+
+// تحويل نص المدة (مثل "1h 23m 45s" أو "19m 58s" أو "45s") إلى ثواني
+function parseDurationToSeconds(text) {
+  if (!text) return 0;
+  let seconds = 0;
+  const hMatch = text.match(/(\d+)\s*h/i);
+  const mMatch = text.match(/(\d+)\s*m(?!s)/i);
+  const sMatch = text.match(/(\d+)\s*s/i);
+  if (hMatch) seconds += parseInt(hMatch[1], 10) * 3600;
+  if (mMatch) seconds += parseInt(mMatch[1], 10) * 60;
+  if (sMatch) seconds += parseInt(sMatch[1], 10);
+  return seconds;
+}
+
+// تحويل الثواني إلى نص عربي مقروء (ساعات ودقائق)
+function formatSecondsToHoursText(seconds) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (hours === 0 && minutes === 0) return '0 دقيقة';
+  const parts = [];
+  if (hours > 0) parts.push(`${hours} ساعة`);
+  if (minutes > 0) parts.push(`${minutes} دقيقة`);
+  return parts.join(' و ');
+}
+
+// جلب آخر قيمة Total Time (بالثواني) لكل عضو من روم سجل الساعات
+async function getTotalHoursMap(guild, targetIds) {
+  const channel = client.channels.cache.get(HOURS_LOG_CHANNEL_ID);
+  if (!channel) {
+    console.error('❌ روم سجل الساعات غير موجود!');
+    return new Map();
+  }
+
+  const totalMap = new Map();
+  const remainingIds = new Set(targetIds);
+  let lastId = null;
+  let fetched = 0;
+  const limit = 3000; // حد أقصى للحماية من حلقات طويلة جداً في الرومات الكبيرة
+
+  while (fetched < limit && remainingIds.size > 0) {
+    const options = { limit: 100 };
+    if (lastId) options.before = lastId;
+    const msgs = await channel.messages.fetch(options);
+    if (msgs.size === 0) break;
+
+    for (const [, msg] of msgs) {
+      if (!msg.embeds || msg.embeds.length === 0) continue;
+      const embed = msg.embeds[0];
+      const fields = embed.fields || [];
+      const adminField = fields.find(f => f.name && f.name.includes('Admin'));
+      const totalField = fields.find(f => f.name && f.name.includes('Total Time'));
+      if (!adminField || !totalField) continue;
+
+      const match = adminField.value.match(/<@!?(\d+)>/);
+      if (!match) continue;
+      const userId = match[1];
+
+      if (totalMap.has(userId)) continue; // أول ظهور (الأحدث) هو الإجمالي الحالي
+
+      const seconds = parseDurationToSeconds(totalField.value);
+      totalMap.set(userId, seconds);
+      remainingIds.delete(userId);
+    }
+
+    lastId = msgs.last().id;
+    fetched += msgs.size;
+    if (msgs.size < 100) break;
+  }
+
+  return totalMap;
 }
 
 // ============================================================
@@ -1242,6 +1323,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const supportRoleChannelDateMap = await getSupportRoleChannelDates(guild);
         console.log(`✅ تم جلب تواريخ رتبة الدعم لـ ${supportRoleChannelDateMap.size} إداري من الروم.`);
 
+        // ✅ جلب إجمالي عدد الساعات (Total Time المتراكم) لكل إداري من روم سجل الساعات
+        console.log('🔄 جاري جلب إجمالي ساعات كل إداري من روم سجل الساعات...');
+        const totalHoursMap = await getTotalHoursMap(guild, [...members.keys()]);
+        console.log(`✅ تم جلب إجمالي الساعات لـ ${totalHoursMap.size} إداري.`);
+
         // قنوات الإحصائيات
         const activateChannel = '1484859915200626829';
         const rejectChannel = '1484865429158756494';
@@ -1288,7 +1374,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
             msg.createdTimestamp >= promotionDate && msg.content.includes(`<@${id}>`)
           ).length;
 
-          statsById.set(id, { member, activates, rejects, reactivates, promotionDate });
+          const totalSeconds = totalHoursMap.get(id) || 0;
+
+          statsById.set(id, { member, activates, rejects, reactivates, promotionDate, totalSeconds });
         }
 
         // ✅ تجميع الأعضاء حسب رتبتهم، بنفس ترتيب ALLOWED_ROLE_IDS بالضبط (مو خليط عشوائي)
@@ -1332,6 +1420,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             bodyText += `▪️ **تفعيل شخص:** ${stat.activates}\n`;
             bodyText += `▪️ **رفض شخص:** ${stat.rejects}\n`;
             bodyText += `▪️ **إعادة تفعيل شخص:** ${stat.reactivates}\n`;
+            bodyText += `▪️ **عدد ساعات الشخص:** ${formatSecondsToHoursText(stat.totalSeconds)}\n`;
             bodyText += `▪️ **آخر ترقية:** ${promotionDateStr}\n\n`;
             totalCount++;
           }
@@ -1346,6 +1435,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             bodyText += `▪️ **تفعيل شخص:** ${stat.activates}\n`;
             bodyText += `▪️ **رفض شخص:** ${stat.rejects}\n`;
             bodyText += `▪️ **إعادة تفعيل شخص:** ${stat.reactivates}\n`;
+            bodyText += `▪️ **عدد ساعات الشخص:** ${formatSecondsToHoursText(stat.totalSeconds)}\n`;
             bodyText += `▪️ **آخر ترقية:** ${promotionDateStr}\n\n`;
             totalCount++;
           }
