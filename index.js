@@ -34,6 +34,7 @@ const {
   TextInputStyle,
   AttachmentBuilder,
   AuditLogEvent,
+  PermissionFlagsBits,
 } = require('discord.js');
 
 // ===== قاعدة بيانات SQLite =====
@@ -778,7 +779,12 @@ client.once(Events.ClientReady, async (c) => {
       { name: 'active_leaves', description: 'عرض قائمة الإداريين المجازين' },
       { name: 'barren', description: 'جرد إحصائيات فريق التفعيل' },
       { name: 'privacy', description: 'عرض سياسة الخصوصية الخاصة بالبوت' },
-      { name: 'send_hm_panel', description: 'إرسال لوحة تسجيل الدخول والخروج للإدارة العليا' }
+      { name: 'send_hm_panel', description: 'إرسال لوحة تسجيل الدخول والخروج للإدارة العليا' },
+      {
+        name: 'restart',
+        description: 'إعادة تشغيل البوت (Administrator فقط)',
+        default_member_permissions: PermissionFlagsBits.Administrator.toString()
+      }
     ];
     await c.application.commands.set(commands, GUILD_ID);
     console.log('✅ تم تسجيل الأوامر.');
@@ -920,6 +926,30 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     console.error('خطأ في السحب:', err);
   }
 });
+
+// ============================================================
+// دالة مساعدة: تعديل رتبة عضو بأمان مع تشخيص واضح لسبب الفشل
+// (تحل مشكلة DiscordAPIError[50013]: Missing Permissions بإعطاء رسالة
+// واضحة بدل ما تفشل بصمت، وتتحقق من الصلاحية والترتيب قبل المحاولة)
+// ============================================================
+async function safeRoleAction(guild, target, action, roleId, label) {
+  const botMember = await guild.members.fetchMe();
+  const role = guild.roles.cache.get(roleId);
+
+  if (!role) {
+    throw new Error(`الرول "${label}" (${roleId}) غير موجود بالسيرفر — تأكد من الآيدي.`);
+  }
+  if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
+    throw new Error('البوت ما يملك صلاحية "Manage Roles" أساسًا بالسيرفر.');
+  }
+  if (botMember.roles.highest.position <= role.position) {
+    throw new Error(`رول البوت لازم يكون أعلى من رول "${role.name}" بترتيب الرولات (إعدادات السيرفر > Roles).`);
+  }
+  if (botMember.roles.highest.position <= target.roles.highest.position) {
+    throw new Error(`رول البوت لازم يكون أعلى من أعلى رول عند ${target.user.tag}.`);
+  }
+  await action();
+}
 
 // ============================================================
 // معالج التفاعلات (الإجازات + التقييم + barren)
@@ -1122,10 +1152,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.update({ embeds: [originalEmbed], components: [disabledRow] });
 
         if (isAccept) {
+          let target = null;
           try {
-            const target = await interaction.guild.members.fetch(requesterId);
+            target = await interaction.guild.members.fetch(requesterId);
+
             if (reqType === 'leave') {
-              await target.roles.add(LEAVE_ROLE_ID);
+              await safeRoleAction(interaction.guild, target, () => target.roles.add(LEAVE_ROLE_ID), LEAVE_ROLE_ID, 'رول الإجازة');
               const durationField = originalEmbed.data.fields.find(f => f.name.includes('المدة'));
               if (durationField) {
                 const match = durationField.value.match(/\d+/);
@@ -1136,7 +1168,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 }
               }
             } else if (reqType === 'resign') {
-              await target.roles.set([RESIGNATION_KEEP_ROLE_ID]);
+              await safeRoleAction(interaction.guild, target, () => target.roles.set([RESIGNATION_KEEP_ROLE_ID]), RESIGNATION_KEEP_ROLE_ID, 'رول الاستقالة');
               try {
                 await target.setNickname(null, 'تم قبول الاستقالة - حذف النيك نيم');
               } catch (nickErr) {
@@ -1144,14 +1176,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
               }
             } else if (reqType === 'break') {
               if (target.roles.cache.has(LEAVE_ROLE_ID)) {
-                await target.roles.remove(LEAVE_ROLE_ID);
+                await safeRoleAction(interaction.guild, target, () => target.roles.remove(LEAVE_ROLE_ID), LEAVE_ROLE_ID, 'رول الإجازة');
               }
               if (activeLeaves.has(requesterId)) {
                 activeLeaves.delete(requesterId);
                 saveActiveLeaves();
               }
             }
-          } catch (e) { console.error('⚠️ خطأ في تعديل الرتب:', e); }
+          } catch (e) {
+            console.error('⚠️ خطأ في تعديل الرتب:', e);
+            // ✅ نخبر الإداري اللي ضغط قبول بسبب الفشل الحقيقي بدل ما يختفي بصمت
+            await interaction.followUp({
+              content: `⚠️ تم قبول الطلب لكن **تعديل الرتب فشل**:\n\`${e.message || 'صلاحيات البوت غير كافية.'}\`\nراجع صلاحية Manage Roles وترتيب رول البوت بإعدادات السيرفر > Roles.`,
+              ephemeral: true
+            }).catch(() => null);
+          }
         }
 
         try {
@@ -1234,6 +1273,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     // ===== الأوامر (سلاش) =====
     if (interaction.isChatInputCommand()) {
+      // ✅ أمر /restart — إعادة تشغيل البوت (Administrator فقط)
+      if (interaction.commandName === 'restart') {
+        // فحص مزدوج للصلاحية (بالإضافة لـ default_member_permissions بتعريف الأمر نفسه)
+        if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+          return interaction.reply({ content: '❌ هذا الأمر خاص بصلاحية Administrator فقط.', ephemeral: true });
+        }
+        await interaction.reply({ content: '🔄 جاري إعادة تشغيل البوت...' });
+        console.log(`🔄 إعادة تشغيل مطلوبة من ${interaction.user.tag} (${interaction.user.id})`);
+        setTimeout(() => process.exit(0), 800);
+        return;
+      }
+
       if (interaction.commandName === 'send_leave_panel') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
