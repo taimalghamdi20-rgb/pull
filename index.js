@@ -3,8 +3,6 @@ const path = require('path');
 const http = require('http');
 
 // ===== سيرفر HTTP وهمي لإبقاء Render راضي على أنها Web Service شغالة =====
-// Render يفحص عن بورت مفتوح، وبوت الديسكورد أصلاً ما يحتاج بورت،
-// فهذا السيرفر البسيط يفتح فقط عشان يمر فحص Render (Port Scan) بدون أي وظيفة فعلية.
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -13,7 +11,7 @@ http.createServer((req, res) => {
   console.log(`🌐 سيرفر HTTP الوهمي شغال على بورت ${PORT}`);
 });
 
-// ===== حماية عامة من الأخطاء غير الملتقطة (تمنع تعليق/طيحان البوت المفاجئ) =====
+// ===== حماية عامة من الأخطاء غير الملتقطة =====
 process.on('unhandledRejection', (reason) => {
   console.error('⚠️ Unhandled Rejection:', reason);
 });
@@ -116,8 +114,6 @@ const WAITING_ROOM_REQUIRED_ROLE = {
 };
 
 // ===== حالة خاصة: رتبة معينة داخل روم انتظار معين =====
-// أي عضو يدخل SPECIAL_WAITING_ROOM_ID ومعه SPECIAL_ROLE_ID
-// يُسحب فقط لرومات SPECIAL_ADMIN_ROOM_IDS، ويشترط بالإداري رتبة SPECIAL_REQUIRED_ADMIN_ROLE_ID
 const SPECIAL_ROLE_ID = '1476796533168017428';
 const SPECIAL_WAITING_ROOM_ID = '1519511668823167116';
 const SPECIAL_ADMIN_ROOM_IDS = [
@@ -148,6 +144,12 @@ const WAITING_NOTIFICATION_CHANNEL_ID = '1536740110966726656';
 const WAITING_MENTION_ROLE_ID = '1499102575918579793';
 const WAITING_TIMEOUT_MS = 3 * 60 * 1000;
 
+// ===== إعدادات التنبيه الخاص بروم الانتظار 1483285123008041031 =====
+const CUSTOM_WAITING_ROOM_ID = '1483285123008041031';
+const CUSTOM_NOTIFICATION_CHANNEL_ID = '1536786125052444864';
+const CUSTOM_MENTION_ROLE_ID = '1486587636863864862';
+const CUSTOM_WAITING_TIMEOUT_MS = 2 * 60 * 1000; // دقيقتان
+
 const ADMIN_ROOM_IDS = [
   '1499105265272754246',
   '1499105221383819497',
@@ -171,8 +173,6 @@ const BARREN_ROLE_ID = '1486588170282733700';
 const PROMOTION_CHANNEL_ID = '1459305425857155308';
 
 // ===== إعداد خاص برتبة الدعم (support) =====
-// هذه الرتبة فقط تعتمد على Audit Log أو روم الدعم لمعرفة تاريخ حصولها على الرتبة،
-// أما باقي الرتب فتبقى تعتمد على قناة الترقيات العادية (بدون أي تغيير).
 const SUPPORT_ROLE_ID = '1499162553245499432';
 const SUPPORT_ROLE_LOG_CHANNEL_ID = '1459305788374782164';
 
@@ -180,24 +180,22 @@ const SUPPORT_ROLE_LOG_CHANNEL_ID = '1459305788374782164';
 const HOURS_LOG_CHANNEL_ID = '1513231005815931000';
 
 // ===== إعدادات لوحة تسجيل الدخول/الخروج للإدارة العليا (High Management) =====
-const HM_PANEL_CHANNEL_ID = '1534312045166592171'; // الروم الي ترسل فيه اللوحة
-const HM_LOG_CHANNEL_ID = '1534313854329159710';   // الروم الي يوصله السجل (Log)
+const HM_PANEL_CHANNEL_ID = '1534312045166592171';
+const HM_LOG_CHANNEL_ID = '1534313854329159710';
 const HM_BANNER_PATH = path.join(__dirname, 'hm_banner.png');
 const HM_BANNER_FILENAME = 'hm_banner.png';
-const HM_IN_COLOR = 0x0b5e2e;  // أخضر غامق
-const HM_OUT_COLOR = 0x7b241c; // أحمر غامق
+const HM_IN_COLOR = 0x0b5e2e;
+const HM_OUT_COLOR = 0x7b241c;
 
-// ===== الرومات الصوتية المسموحة لتسجيل Login / Logout (لازم يكون العضو داخل أحدها) =====
 const HM_REQUIRED_VOICE_CHANNEL_IDS = [
   '1534308507611041842',
   '1534308470331805767',
   '1520491813310562536'
 ];
-const HM_AUTO_OUT_TIMEOUT_MS = 60 * 1000; // دقيقة واحدة قبل تسجيل الخروج التلقائي
+const HM_AUTO_OUT_TIMEOUT_MS = 60 * 1000;
 
-// ===== تتبع حالة تسجيل الدخول ومؤقتات الخروج التلقائي للإدارة العليا =====
-const hmCheckedIn = new Map();   // userId -> true إذا مسجل دخول حالياً
-const hmLeaveTimers = new Map(); // userId -> Timeout الخاص بالخروج التلقائي
+const hmCheckedIn = new Map();
+const hmLeaveTimers = new Map();
 
 // ===== قائمة الرتب الإدارية المسموح بعرضها في الجرد (بالترتيب المطلوب) =====
 const ALLOWED_ROLE_IDS = [
@@ -274,7 +272,8 @@ const client = new Client({
 // ===== حالة الجلسات النشطة والكول داون =====
 const activeSessions = new Map();
 const cooldownMap = new Map();
-const waitingTimers = new Map();
+const waitingTimers = new Map(); // للمؤقتات العامة (3 دقائق)
+const customWaitingTimers = new Map(); // للمؤقت الخاص بروم 1483285123008041031 (دقيقتان)
 
 // ============================================================
 // دوال التقييم
@@ -297,7 +296,7 @@ function ratingLabel(rating) {
 }
 
 // ============================================================
-// دوال جلب الإحصائيات (لأمر barren) - مع دعم تاريخ الترقية
+// دوال جلب الإحصائيات (لأمر barren)
 // ============================================================
 async function fetchMessagesFromDate(channelId, fromDate) {
   try {
@@ -325,7 +324,6 @@ async function fetchMessagesFromDate(channelId, fromDate) {
   }
 }
 
-// دالة لاستخراج آخر تاريخ ترقية لكل إداري من قناة الترقيات (بدون أي تغيير - تُستخدم لباقي الرتب)
 async function getLastPromotionDate(guild) {
   const promotionChannel = client.channels.cache.get(PROMOTION_CHANNEL_ID);
   if (!promotionChannel) {
@@ -337,18 +335,15 @@ async function getLastPromotionDate(guild) {
   let lastId = null;
   let fetched = 0;
   const limit = 1000;
-  // نبحث في آخر 1000 رسالة (عادةً تكفي لآخر شهرين من الترقيات)
   while (fetched < limit) {
     const options = { limit: 100 };
     if (lastId) options.before = lastId;
     const msgs = await promotionChannel.messages.fetch(options);
     if (msgs.size === 0) break;
     for (const [, msg] of msgs) {
-      // نبحث عن منشن عضو في الرسالة
       const match = msg.content.match(/<@!?(\d+)>/);
       if (match) {
         const userId = match[1];
-        // إذا لم يكن لدينا تاريخ لهذا المستخدم من قبل، نخزن التاريخ (أحدث ترقية تكون أول ظهور)
         if (!lastPromotionMap.has(userId)) {
           lastPromotionMap.set(userId, msg.createdTimestamp);
         }
@@ -356,20 +351,12 @@ async function getLastPromotionDate(guild) {
     }
     lastId = msgs.last().id;
     fetched += msgs.size;
-    if (msgs.size < 100) break; // إذا وصلنا لنهاية القناة
+    if (msgs.size < 100) break;
   }
 
   return lastPromotionMap;
 }
 
-// ============================================================
-// ✅ إضافة: تحديد تاريخ الحصول على رتبة الدعم (support) فقط
-// المصدر الأول: روم سجل رتبة الدعم (SUPPORT_ROLE_LOG_CHANNEL_ID)
-// المصدر الثاني (احتياطي): Audit Log الخاص بالسيرفر (بحث عن آخر عملية إضافة للرتبة)
-// لا يؤثر هذا إطلاقاً على باقي الرتب، التي تبقى تعتمد على getLastPromotionDate كما هي.
-// ============================================================
-
-// 1) قراءة روم سجل رتبة الدعم واستخراج أول ظهور (الأحدث) لكل عضو
 async function getSupportRoleChannelDates(guild) {
   const supportChannel = client.channels.cache.get(SUPPORT_ROLE_LOG_CHANNEL_ID);
   if (!supportChannel) {
@@ -390,7 +377,6 @@ async function getSupportRoleChannelDates(guild) {
       const match = msg.content.match(/<@!?(\d+)>/);
       if (match) {
         const userId = match[1];
-        // أول ظهور نبحث عنه (وإحنا نازلين من الأحدث للأقدم) هو أحدث تاريخ حصلت فيه الرتبة
         if (!dateMap.has(userId)) {
           dateMap.set(userId, msg.createdTimestamp);
         }
@@ -404,11 +390,10 @@ async function getSupportRoleChannelDates(guild) {
   return dateMap;
 }
 
-// 2) البحث في Audit Log عن آخر عملية إضافة لرتبة معينة لعضو معين
 async function getRoleAddDateFromAuditLog(guild, userId, roleId) {
   try {
     let before = undefined;
-    for (let page = 0; page < 10; page++) { // حتى 1000 حدث كحد أقصى
+    for (let page = 0; page < 10; page++) {
       const logs = await guild.fetchAuditLogs({
         type: AuditLogEvent.MemberRoleUpdate,
         limit: 100,
@@ -437,24 +422,15 @@ async function getRoleAddDateFromAuditLog(guild, userId, roleId) {
   return null;
 }
 
-// 3) دالة موحّدة: تحدد تاريخ حصول عضو على رتبة الدعم (روم السجل ثم Audit Log كاحتياطي)
 async function resolveSupportRoleDate(guild, userId, supportChannelDateMap) {
   if (supportChannelDateMap.has(userId)) {
     return supportChannelDateMap.get(userId);
   }
   const auditDate = await getRoleAddDateFromAuditLog(guild, userId, SUPPORT_ROLE_ID);
   if (auditDate) return auditDate;
-  return null; // لم يتم العثور على تاريخ، سيتم استخدام القيمة الافتراضية لاحقاً
+  return null;
 }
 
-// ============================================================
-// ✅ إضافة: قراءة "عدد ساعات الشخص" (Total Time المتراكم) من روم سجل الساعات
-// كل رسالة عبارة عن إمبد "Admin Logout" فيه حقل Admin (منشن) وحقل Total Time (مثل "19m 58s").
-// بما أن Total Time قيمة تراكمية، فأول ظهور لكل عضو ونحن نازلين من الأحدث للأقدم
-// هو آخر/أكبر قيمة متراكمة له، فنكتفي به ونتجاهل الباقي لنفس العضو.
-// ============================================================
-
-// تحويل نص المدة (مثل "1h 23m 45s" أو "19m 58s" أو "45s") إلى ثواني
 function parseDurationToSeconds(text) {
   if (!text) return 0;
   let seconds = 0;
@@ -467,7 +443,6 @@ function parseDurationToSeconds(text) {
   return seconds;
 }
 
-// تحويل الثواني إلى نص عربي مقروء (ساعات ودقائق)
 function formatSecondsToHoursText(seconds) {
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
@@ -478,7 +453,6 @@ function formatSecondsToHoursText(seconds) {
   return parts.join(' و ');
 }
 
-// جلب آخر قيمة Total Time (بالثواني) لكل عضو من روم سجل الساعات
 async function getTotalHoursMap(guild, targetIds) {
   const channel = client.channels.cache.get(HOURS_LOG_CHANNEL_ID);
   if (!channel) {
@@ -490,7 +464,7 @@ async function getTotalHoursMap(guild, targetIds) {
   const remainingIds = new Set(targetIds);
   let lastId = null;
   let fetched = 0;
-  const limit = 3000; // حد أقصى للحماية من حلقات طويلة جداً في الرومات الكبيرة
+  const limit = 3000;
 
   while (fetched < limit && remainingIds.size > 0) {
     const options = { limit: 100 };
@@ -510,7 +484,7 @@ async function getTotalHoursMap(guild, targetIds) {
       if (!match) continue;
       const userId = match[1];
 
-      if (totalMap.has(userId)) continue; // أول ظهور (الأحدث) هو الإجمالي الحالي
+      if (totalMap.has(userId)) continue;
 
       const seconds = parseDurationToSeconds(totalField.value);
       totalMap.set(userId, seconds);
@@ -526,7 +500,7 @@ async function getTotalHoursMap(guild, targetIds) {
 }
 
 // ============================================================
-// خروج تلقائي للإدارة العليا (High Management) بعد مغادرة الرومات المطلوبة
+// خروج تلقائي للإدارة العليا
 // ============================================================
 async function autoHmCheckout(guild, userId) {
   const nowTimestamp = Math.floor(Date.now() / 1000);
@@ -601,7 +575,6 @@ function isFreeAdminRoom(channel, targetAdminRoomIds, requiredRoleId = null) {
   const adminMember = members[0];
   if (requiredRoleId && !adminMember.roles.cache.has(requiredRoleId)) return false;
   if (!adminMember.roles.cache.has(ADMIN_ROLE_ID)) return false;
-  // ✅ تم تصحيح الشرط هنا: الإداري المتفرغ هو الذي لم يقم بـ Deafen
   return !isDeafened(adminMember.voice);
 }
 
@@ -640,7 +613,6 @@ async function tryPullForAllFreeAdmins(guild) {
   let targetAdminRoomIds;
   let requiredRoleId;
 
-  // ===== الحالة الخاصة: روم انتظار معين + رتبة معينة عند المواطن =====
   const isSpecialCase =
     waitingChannelId === SPECIAL_WAITING_ROOM_ID &&
     candidate.roles.cache.has(SPECIAL_ROLE_ID);
@@ -670,14 +642,12 @@ async function tryPullForAllFreeAdmins(guild) {
   if (activeSessions.has(candidate.id)) return;
 
   const eligibleAdmins = freeAdmins.filter(({ adminMember }) => {
-    // ✅ فحص كول داون 15 ثانية للإداري (لمنع سحب مواطن ثانٍ له مباشرة)
     const adminCooldownKey = adminMember.id;
     const adminCooldownEnd = cooldownMap.get(adminCooldownKey);
     if (adminCooldownEnd && adminCooldownEnd > Date.now()) {
       return false;
     }
 
-    // فحص كول داون 60 ثانية للزوج (إداري + مواطن)
     const pairKey = `${adminMember.id}_${candidate.id}`;
     const pairCooldownEnd = cooldownMap.get(pairKey);
     if (pairCooldownEnd && pairCooldownEnd > Date.now()) {
@@ -704,7 +674,6 @@ async function tryPullForAllFreeAdmins(guild) {
       startTime: Date.now()
     });
 
-    // ✅ تعيين كول داون 15 ثانية للإداري بعد سحب المواطن له
     cooldownMap.set(adminMember.id, Date.now() + 15 * 1000);
 
     await sendCitizenNotification(candidate.user, adminMember.user);
@@ -792,25 +761,23 @@ client.once(Events.ClientReady, async (c) => {
 });
 
 // ============================================================
-// أحداث الصوت
+// أحداث الصوت (بما فيها التنبيه الخاص بروم 1483285123008041031)
 // ============================================================
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const guild = newState.guild || oldState.guild;
   if (!guild || guild.id !== GUILD_ID) return;
   const userId = newState.id;
 
-  // ===== تتبع دخول/خروج الإدارة العليا من الرومات المطلوبة =====
+  // ===== تتبع دخول/خروج الإدارة العليا =====
   const isNowInHmRoom = newState.channelId && HM_REQUIRED_VOICE_CHANNEL_IDS.includes(newState.channelId);
   const wasInHmRoom = oldState.channelId && HM_REQUIRED_VOICE_CHANNEL_IDS.includes(oldState.channelId);
 
-  // إذا رجع لأحد الرومات المطلوبة، نلغي مؤقت الخروج التلقائي إن وجد
   if (isNowInHmRoom && hmLeaveTimers.has(userId)) {
     clearTimeout(hmLeaveTimers.get(userId));
     hmLeaveTimers.delete(userId);
     console.log(`✅ ${userId} رجع لروم High Management، تم إلغاء مؤقت الخروج التلقائي.`);
   }
 
-  // إذا خرج من روم مطلوب وهو مسجل دخول حالياً، نبدأ مؤقت دقيقة قبل تسجيل الخروج التلقائي
   if (wasInHmRoom && !isNowInHmRoom && hmCheckedIn.has(userId)) {
     if (hmLeaveTimers.has(userId)) {
       clearTimeout(hmLeaveTimers.get(userId));
@@ -832,6 +799,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     hmLeaveTimers.set(userId, timer);
   }
 
+  // ===== جلسات المواطنين مع الإداريين =====
   const session = activeSessions.get(userId);
   if (session) {
     const adminId = session.adminId;
@@ -842,8 +810,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
 
     const adminVoice = adminMember.voice;
-    const citizenVoice = newState;
-
     const wasInAdminRoom = oldState.channelId && ADMIN_ROOM_IDS.includes(oldState.channelId);
     const isInAdminRoom = newState.channelId && ADMIN_ROOM_IDS.includes(newState.channelId);
     if (wasInAdminRoom && !isInAdminRoom) {
@@ -866,10 +832,64 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  const enteredWaiting = WAITING_CHANNEL_IDS.includes(newState.channelId) && !WAITING_CHANNEL_IDS.includes(oldState.channelId);
-  const leftWaiting = WAITING_CHANNEL_IDS.includes(oldState.channelId) && !WAITING_CHANNEL_IDS.includes(newState.channelId);
+  // ===== منطق التنبيه العام (3 دقائق) لجميع رومات الانتظار باستثناء الروم الخاص =====
+  const enteredWaitingGeneral = WAITING_CHANNEL_IDS.includes(newState.channelId) && !WAITING_CHANNEL_IDS.includes(oldState.channelId);
+  const leftWaitingGeneral = WAITING_CHANNEL_IDS.includes(oldState.channelId) && !WAITING_CHANNEL_IDS.includes(newState.channelId);
 
-  if (enteredWaiting) {
+  // نتعامل مع الروم الخاص بشكل منفصل
+  const isCustomRoom = newState.channelId === CUSTOM_WAITING_ROOM_ID;
+  const wasCustomRoom = oldState.channelId === CUSTOM_WAITING_ROOM_ID;
+
+  // === التنبيه الخاص بروم 1483285123008041031 (دقيقتان) ===
+  if (isCustomRoom && !wasCustomRoom) {
+    const member = await guild.members.fetch(userId).catch(() => null);
+    if (member && !hasStaffRole(member)) {
+      // إلغاء أي مؤقت سابق لنفس المستخدم
+      if (customWaitingTimers.has(userId)) {
+        clearTimeout(customWaitingTimers.get(userId));
+        customWaitingTimers.delete(userId);
+      }
+
+      const timer = setTimeout(async () => {
+        try {
+          const currentMember = await guild.members.fetch(userId).catch(() => null);
+          if (!currentMember) return;
+          const voiceChannel = currentMember.voice.channel;
+          if (!voiceChannel || voiceChannel.id !== CUSTOM_WAITING_ROOM_ID) return;
+          if (hasStaffRole(currentMember)) return;
+
+          // إرسال التنبيه
+          const channel = guild.channels.cache.get(CUSTOM_NOTIFICATION_CHANNEL_ID);
+          if (channel) {
+            await channel.send(`<@&${CUSTOM_MENTION_ROLE_ID}> يوجد شخص في الانتظار، يرجى التوجه لخدمته.`);
+          }
+          // حذف المؤقت بعد الإرسال
+          customWaitingTimers.delete(userId);
+        } catch (err) {
+          console.error('❌ خطأ في تنبيه الانتظار الخاص:', err);
+        }
+      }, CUSTOM_WAITING_TIMEOUT_MS);
+
+      customWaitingTimers.set(userId, timer);
+      console.log(`⏳ بدأ مؤقت دقيقتين للعضو ${userId} في الروم المخصص.`);
+    }
+  }
+
+  // إذا غادر العضو الروم الخاص قبل انتهاء المؤقت، نلغي المؤقت
+  if (!isCustomRoom && wasCustomRoom) {
+    if (customWaitingTimers.has(userId)) {
+      clearTimeout(customWaitingTimers.get(userId));
+      customWaitingTimers.delete(userId);
+      console.log(`⏹️ تم إلغاء مؤقت العضو ${userId} بعد مغادرة الروم المخصص.`);
+    }
+  }
+
+  // === التنبيه العام (3 دقائق) لبقية الرومات (باستثناء الروم الخاص) ===
+  // نمنع التنبيه العام على الروم الخاص
+  const isGeneralWaiting = WAITING_CHANNEL_IDS.includes(newState.channelId) && !WAITING_CHANNEL_IDS.includes(oldState.channelId) && newState.channelId !== CUSTOM_WAITING_ROOM_ID;
+  const isLeavingGeneral = WAITING_CHANNEL_IDS.includes(oldState.channelId) && !WAITING_CHANNEL_IDS.includes(newState.channelId) && oldState.channelId !== CUSTOM_WAITING_ROOM_ID;
+
+  if (isGeneralWaiting) {
     const member = await guild.members.fetch(userId).catch(() => null);
     if (member && !hasStaffRole(member)) {
       const oldEntry = waitingTimers.get(userId);
@@ -890,7 +910,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           const entry = waitingTimers.get(userId);
           if (entry) entry.sent = true;
         } catch (err) {
-          console.error('❌ خطأ في تنبيه الانتظار:', err);
+          console.error('❌ خطأ في تنبيه الانتظار العام:', err);
         }
       }, WAITING_TIMEOUT_MS);
 
@@ -898,7 +918,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  if (leftWaiting) {
+  if (isLeavingGeneral) {
     const entry = waitingTimers.get(userId);
     if (entry) {
       clearTimeout(entry.timeout);
@@ -906,8 +926,9 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  const enteredWaitingOriginal = WAITING_CHANNEL_IDS.includes(newState.channelId) && !WAITING_CHANNEL_IDS.includes(oldState.channelId);
-  if (enteredWaitingOriginal) {
+  // ===== محاولة السحب التلقائي عند الدخول إلى أي روم انتظار (بما فيه الخاص) =====
+  const enteredAnyWaiting = WAITING_CHANNEL_IDS.includes(newState.channelId) && !WAITING_CHANNEL_IDS.includes(oldState.channelId);
+  if (enteredAnyWaiting) {
     const member = await guild.members.fetch(userId).catch(() => null);
     if (member && !hasStaffRole(member)) {
       try {
@@ -918,6 +939,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
+  // محاولة سحب إضافية بعد أي تغيير
   try {
     await tryPullForAllFreeAdmins(guild);
   } catch (err) {
@@ -926,9 +948,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 });
 
 // ============================================================
-// دالة مساعدة: تعديل رتبة عضو بأمان مع تشخيص واضح لسبب الفشل
-// (تحل مشكلة DiscordAPIError[50013]: Missing Permissions بإعطاء رسالة
-// واضحة بدل ما تفشل بصمت، وتتحقق من الصلاحية والترتيب قبل المحاولة)
+// دالة مساعدة: تعديل رتبة عضو بأمان
 // ============================================================
 async function safeRoleAction(guild, target, action, roleId, label) {
   const botMember = await guild.members.fetchMe();
@@ -950,7 +970,7 @@ async function safeRoleAction(guild, target, action, roleId, label) {
 }
 
 // ============================================================
-// معالج التفاعلات (الإجازات + التقييم + barren)
+// معالج التفاعلات (الإجازات + التقييم + الأوامر)
 // ============================================================
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
@@ -1000,11 +1020,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    // ===== أزرار تسجيل الدخول/الخروج للإدارة العليا (High Management) =====
+    // ===== أزرار تسجيل الدخول/الخروج للإدارة العليا =====
     if (interaction.isButton() && (interaction.customId === 'hm_check_in' || interaction.customId === 'hm_check_out')) {
       const isIn = interaction.customId === 'hm_check_in';
 
-      // ✅ لازم يكون العضو داخل أحد الرومات الصوتية المحددة عشان يقدر يسجل
       const memberVoiceChannelId = interaction.member.voice.channelId;
       const isInAllowedRoom = memberVoiceChannelId && HM_REQUIRED_VOICE_CHANNEL_IDS.includes(memberVoiceChannelId);
 
@@ -1033,7 +1052,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           await logChannel.send({ embeds: [logEmbed] });
         }
 
-        // ✅ تحديث حالة التتبع وإلغاء أي مؤقت خروج تلقائي معلّق
         if (hmLeaveTimers.has(interaction.user.id)) {
           clearTimeout(hmLeaveTimers.get(interaction.user.id));
           hmLeaveTimers.delete(interaction.user.id);
@@ -1183,7 +1201,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             }
           } catch (e) {
             console.error('⚠️ خطأ في تعديل الرتب:', e);
-            // ✅ نخبر الإداري اللي ضغط قبول بسبب الفشل الحقيقي بدل ما يختفي بصمت
             await interaction.followUp({
               content: `⚠️ تم قبول الطلب لكن **تعديل الرتب فشل**:\n\`${e.message || 'صلاحيات البوت غير كافية.'}\`\nراجع صلاحية Manage Roles وترتيب رول البوت بإعدادات السيرفر > Roles.`,
               ephemeral: true
@@ -1271,9 +1288,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     // ===== الأوامر (سلاش) =====
     if (interaction.isChatInputCommand()) {
-      // ✅ أمر /restart — إعادة تشغيل البوت (Administrator فقط)
+      // /restart
       if (interaction.commandName === 'restart') {
-        // فحص مزدوج للصلاحية (بالإضافة لـ default_member_permissions بتعريف الأمر نفسه)
         if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
           return interaction.reply({ content: '❌ هذا الأمر خاص بصلاحية Administrator فقط.', ephemeral: true });
         }
@@ -1283,6 +1299,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
+      // /send_leave_panel
       if (interaction.commandName === 'send_leave_panel') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
@@ -1309,6 +1326,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: `✅ تم إرسال اللوحة إلى <#${LEAVE_EMBED_CHANNEL_ID}>.`, ephemeral: true });
       }
 
+      // /active_leaves
       if (interaction.commandName === 'active_leaves') {
         if (!hasStaffRole(interaction.member)) return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
         if (activeLeaves.size === 0) return interaction.reply({ content: '🌴 لا يوجد إداري في إجازة.', ephemeral: true });
@@ -1326,7 +1344,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [new EmbedBuilder().setTitle('📋 الإجازات النشطة').setColor(0x3ba55d).setDescription(desc)] });
       }
 
-      // ===== أمر barren (متاح فقط لرتبة BARREN_ROLE_ID) =====
+      // /barren
       if (interaction.commandName === 'barren') {
         if (!hasBarrenRole(interaction.member)) {
           return interaction.reply({ 
@@ -1354,7 +1372,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
         console.log(`✅ تم العثور على الرتبة: "${role.name}" (${role.id})`);
 
-        // استخدام role.members للحصول على العدد الصحيح
         const members = role.members;
         console.log(`📊 عدد الأعضاء في role.members: ${members.size}`);
 
@@ -1362,29 +1379,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.editReply({ content: '❌ لا يوجد أعضاء في فريق التفعيل.' });
         }
 
-        // جلب آخر تاريخ ترقية لكل إداري (يبقى كما هو لباقي الرتب)
         console.log('🔄 جاري جلب تواريخ آخر ترقية لكل إداري من قناة الترقيات...');
         const lastPromotionMap = await getLastPromotionDate(guild);
         console.log(`✅ تم جلب تواريخ الترقية لـ ${lastPromotionMap.size} إداري.`);
 
-        // ✅ جلب تواريخ رتبة الدعم من روم السجل الخاص بها (يُستخدم فقط لرتبة SUPPORT_ROLE_ID)
         console.log('🔄 جاري جلب تواريخ رتبة الدعم من روم السجل...');
         const supportRoleChannelDateMap = await getSupportRoleChannelDates(guild);
         console.log(`✅ تم جلب تواريخ رتبة الدعم لـ ${supportRoleChannelDateMap.size} إداري من الروم.`);
 
-        // ✅ جلب إجمالي عدد الساعات (Total Time المتراكم) لكل إداري من روم سجل الساعات
         console.log('🔄 جاري جلب إجمالي ساعات كل إداري من روم سجل الساعات...');
         const totalHoursMap = await getTotalHoursMap(guild, [...members.keys()]);
         console.log(`✅ تم جلب إجمالي الساعات لـ ${totalHoursMap.size} إداري.`);
 
-        // قنوات الإحصائيات
         const activateChannel = '1484859915200626829';
         const rejectChannel = '1484865429158756494';
         const reactivateChannel = '1493565275428225125';
 
-        // جلب الرسائل من القنوات - سنقوم بجلبها لكل إداري حسب تاريخ ترقيته
-        // ولكن لتحسين الأداء، نجلب جميع الرسائل من القنوات (آخر 30 يوم) ثم نفلتر حسب التاريخ لكل إداري
-        const days = 30; // نأخذ 30 يوم للاحتياط
+        const days = 30;
         const [activateMsgs, rejectMsgs, reactivateMsgs] = await Promise.all([
           fetchMessagesFromDate(activateChannel, Date.now() - days * 24 * 60 * 60 * 1000),
           fetchMessagesFromDate(rejectChannel, Date.now() - days * 24 * 60 * 60 * 1000),
@@ -1395,24 +1406,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
         console.log(`📊 عدد رسائل الرفض: ${rejectMsgs.length}`);
         console.log(`📊 عدد رسائل إعادة التفعيل: ${reactivatesMsgs.length}`);
 
-        // حساب الإحصائيات لكل عضو بناءً على تاريخ ترقيته
         const statsById = new Map();
         for (const [id, member] of members) {
-          // ✅ تحديد تاريخ البداية: رتبة الدعم تعتمد على روم سجلها ثم Audit Log كاحتياطي،
-          // أما باقي الرتب فتبقى كما هي بدون أي تغيير (قناة الترقيات العادية).
           let promotionDate;
           if (member.roles.cache.has(SUPPORT_ROLE_ID)) {
             promotionDate = await resolveSupportRoleDate(guild, id, supportRoleChannelDateMap);
             if (!promotionDate) {
-              // احتياط أخير إذا ما وُجد شيء في الروم ولا في Audit Log
               promotionDate = lastPromotionMap.get(id) || Date.now() - 7 * 24 * 60 * 60 * 1000;
             }
           } else {
-            promotionDate = lastPromotionMap.get(id) || Date.now() - 7 * 24 * 60 * 60 * 1000; // إذا لم يوجد، نأخذ آخر 7 أيام
+            promotionDate = lastPromotionMap.get(id) || Date.now() - 7 * 24 * 60 * 60 * 1000;
           }
           console.log(`   ⏰ ${member.user.tag} آخر ترقية: ${new Date(promotionDate).toLocaleDateString('ar-SA')}`);
 
-          // تصفية الرسائل التي تمت بعد تاريخ الترقية
           const activates = activateMsgs.filter(msg => 
             msg.createdTimestamp >= promotionDate && msg.content.includes(`<@${id}>`)
           ).length;
@@ -1428,10 +1434,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           statsById.set(id, { member, activates, rejects, reactivates, promotionDate, totalSeconds });
         }
 
-        // ✅ تجميع الأعضاء حسب رتبتهم، بنفس ترتيب ALLOWED_ROLE_IDS بالضبط (مو خليط عشوائي)
-        // كل عضو يوضع تحت أول رتبة يملكها من القائمة (حسب أولوية الترتيب المعطى)
         const assignedIds = new Set();
-        const groupedByRole = []; // [{ roleId, roleObj, entries: [...] }]
+        const groupedByRole = [];
 
         for (const roleId of ALLOWED_ROLE_IDS) {
           const roleObj = guild.roles.cache.get(roleId);
@@ -1447,14 +1451,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
           groupedByRole.push({ roleId, roleObj, entries });
         }
 
-        // الأعضاء اللي ما عندهم أي رتبة من القائمة أعلاه (يظهرون بمجموعة منفصلة بالأخير)
         const noRoleEntries = [];
         for (const [id, stat] of statsById) {
           if (!assignedIds.has(id)) noRoleEntries.push(stat);
         }
         noRoleEntries.sort((a, b) => b.activates - a.activates);
 
-        // بناء النص الأساسي مجمّع حسب كل رتبة بالترتيب المطلوب بالضبط
         let bodyText = '';
         let totalCount = 0;
 
@@ -1493,7 +1495,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const header = `📊 جرد فريق التفعيل (منذ آخر ترقية لكل عضو)\n\n`;
         const footer = `\n**تم جرد ${totalCount} شخص.**`;
 
-        // تقسيم النص
         const MAX_MSG_LENGTH = 2000;
         const fullText = header + bodyText + footer;
 
@@ -1518,7 +1519,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
           console.log(`📊 عدد الأجزاء: ${parts.length}`);
 
-          const totalParts = parts.length;
           const logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
 
           for (let i = 0; i < parts.length; i++) {
@@ -1532,7 +1532,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             }
 
             if (content.length > MAX_MSG_LENGTH) {
-              // تقسيم إضافي إذا لزم الأمر
               const subParts = [];
               let sub = '';
               const subLines = content.split('\n');
@@ -1578,7 +1577,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         console.log('==============================================================\n');
       }
 
-      // ✅ أمر /send_hm_panel - إرسال لوحة تسجيل الدخول والخروج للإدارة العليا
+      // /send_hm_panel
       if (interaction.commandName === 'send_hm_panel') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
@@ -1593,13 +1592,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
           })
           .setTimestamp();
 
-        // ✅ تعديل الأزرار: Login (أخضر) و Logout (أحمر)
         const hmRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId('hm_check_in').setLabel('Login').setStyle(ButtonStyle.Success),
           new ButtonBuilder().setCustomId('hm_check_out').setLabel('Logout').setStyle(ButtonStyle.Danger)
         );
 
-        // ✅ نتأكد أن ملف البنر موجود فعلاً قبل محاولة إرفاقه، حتى لا يكسر الأمر إذا كان الملف مفقود على السيرفر
         const hmFiles = [];
         if (fs.existsSync(HM_BANNER_PATH)) {
           hmFiles.push(new AttachmentBuilder(HM_BANNER_PATH, { name: HM_BANNER_FILENAME }));
@@ -1618,7 +1615,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
       }
 
-      // ✅ أمر /privacy
+      // /privacy
       if (interaction.commandName === 'privacy') {
         const privacyUrl = process.env.PRIVACY_POLICY_URL;
 
