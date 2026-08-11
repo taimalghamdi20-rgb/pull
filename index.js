@@ -17,7 +17,7 @@ http.createServer((req, res) => {
 process.on('unhandledRejection', (reason) => {
   console.error('⚠️ Unhandled Rejection:', reason);
 });
-process.on('uncaughtException', (err) => {
+process.on('uncaughtException', (err) {
   console.error('⚠️ Uncaught Exception:', err);
 });
 
@@ -1395,7 +1395,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         console.log(`📊 عدد رسائل التفعيل: ${activateMsgs.length}`);
         console.log(`📊 عدد رسائل الرفض: ${rejectMsgs.length}`);
-        console.log(`📊 عدد رسائل إعادة التفعيل: ${reactivateMsgs.length}`);
+        console.log(`📊 عدد رسائل إعادة التفعيل: ${reactivatesMsgs.length}`);
 
         // حساب الإحصائيات لكل عضو بناءً على تاريخ ترقيته
         const statsById = new Map();
@@ -1590,15 +1590,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setTitle('Admins Login - Logout')
           .setDescription(`• Login : تسجيل دخول\n• Logout : تسجيل خروج`)
           .setColor(0x2b2d31)
-          .setFooter({ text: 'First Town by Kaspier' })
+          .setFooter({ 
+            text: 'Powered By [ First Town - Development Team ]' 
+          })
           .setTimestamp();
 
+        // ✅ تعديل الأزرار: Login (أخضر) و Logout (أحمر)
         const hmRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('hm_check_in').setLabel('IN').setStyle(ButtonStyle.Success),
-          new ButtonBuilder().setCustomId('hm_check_out').setLabel('OUT').setStyle(ButtonStyle.Danger)
+          new ButtonBuilder().setCustomId('hm_check_in').setLabel('Login').setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId('hm_check_out').setLabel('Logout').setStyle(ButtonStyle.Danger)
         );
 
-        // ✅ نتأكد أن ملف البنر موجود فعلياً قبل محاولة إرفاقه، حتى لا يكسر الأمر إذا كان الملف مفقود على السيرفر
+        // ✅ نتأكد أن ملف البنر موجود فعلاً قبل محاولة إرفاقه، حتى لا يكسر الأمر إذا كان الملف مفقود على السيرفر
         const hmFiles = [];
         if (fs.existsSync(HM_BANNER_PATH)) {
           hmFiles.push(new AttachmentBuilder(HM_BANNER_PATH, { name: HM_BANNER_FILENAME }));
