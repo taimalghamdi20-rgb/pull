@@ -187,10 +187,8 @@ const HM_BANNER_FILENAME = 'hm_banner.png';
 const HM_IN_COLOR = 0x0b5e2e;  // أخضر غامق
 const HM_OUT_COLOR = 0x7b241c; // أحمر غامق
 
-// ===== الرومات الصوتية المسموحة لتسجيل IN / OUT (لازم يكون العضو داخل أحدها) =====
+// ===== الرومات الصوتية المسموحة لتسجيل Login / Logout (لازم يكون العضو داخل أحدها) =====
 const HM_REQUIRED_VOICE_CHANNEL_IDS = [
-  '1534308524321018060',
-  '1534308489000779936',
   '1534308507611041842',
   '1534308470331805767',
   '1520491813310562536'
@@ -546,7 +544,7 @@ async function autoHmCheckout(guild, userId) {
         name: user ? user.username : userId,
         iconURL: user ? user.displayAvatarURL() : undefined
       })
-      .setTitle('🔴 تسجيل خروج تلقائي (OUT)')
+      .setTitle('🔴 تسجيل خروج تلقائي (Logout)')
       .setDescription('تم تسجيل الخروج تلقائياً بعد مغادرة الروم لمدة دقيقة بدون رجوع.')
       .addFields(
         { name: 'العضو', value: `<@${userId}>`, inline: true },
