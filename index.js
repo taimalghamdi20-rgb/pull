@@ -742,14 +742,14 @@ client.once(Events.ClientReady, async (c) => {
   console.log(`🤖 البوت شغال باسم ${c.user.tag}`);
   try {
     const commands = [
-      { name: 'send_leave_panel', description: 'إرسال لوحة طلبات الإجازات والاستقالات' },
-      { name: 'active_leaves', description: 'عرض قائمة الإداريين المجازين' },
-      { name: 'barren', description: 'جرد إحصائيات فريق التفعيل' },
+      { name: 'إرسال لوحة طلبات الإجازات والاستقالات', description: 'إرسال لوحة طلبات الإجازات والاستقالات' },
+      { name: 'عرض قائمة الي ماخذين اجازة', description: 'عرض قائمة الإداريين الي ماخذين اجازة' },
+      { name: 'جرد التفعيل', description: 'جرد إحصائيات فريق التفعيل' },
       { name: 'privacy', description: 'عرض سياسة الخصوصية الخاصة بالبوت' },
-      { name: 'send_hm_panel', description: 'إرسال لوحة تسجيل الدخول والخروج للإدارة العليا' },
+      { name: 'send_highmanagement_panel', description: 'إرسال لوحة تسجيل الدخول والخروج للإدارة العليا' },
       {
         name: 'restart',
-        description: 'إعادة تشغيل البوت (Administrator فقط)',
+        description: 'إعادة تشغيل البوت ( فقط المسؤولين)',
         default_member_permissions: PermissionFlagsBits.Administrator.toString()
       }
     ];
