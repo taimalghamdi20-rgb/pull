@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 
-// ===== سيرفر HTTP وهمي لإبقاء Render راضي على أنها Web Service شغالة =====
+// ===== سيرفر HTTP وهمي لإبقاء Render راضي =====
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -137,7 +137,6 @@ const LEAVE_ROLE_ID = '1459304469127758027';
 const RESIGNATION_KEEP_ROLE_ID = '1476796533168017428';
 const STAFF_ROLE_IDS = ['1459304407899443396', '1459304410923532481'];
 
-// ===== الرتب اللي تُمنشن مع كل طلب إجازة/استقالة/كسر إجازة يوصل لروم المراجعة =====
 const LEAVE_REQUEST_MENTION_ROLE_IDS = ['1459304407899443396', '1459304410923532481'];
 
 const WAITING_NOTIFICATION_CHANNEL_ID = '1536740110966726656';
@@ -148,7 +147,7 @@ const WAITING_TIMEOUT_MS = 3 * 60 * 1000;
 const CUSTOM_WAITING_ROOM_ID = '1483285123008041031';
 const CUSTOM_NOTIFICATION_CHANNEL_ID = '1536786125052444864';
 const CUSTOM_MENTION_ROLE_ID = '1486587636863864862';
-const CUSTOM_WAITING_TIMEOUT_MS = 2 * 60 * 1000; // دقيقتان
+const CUSTOM_WAITING_TIMEOUT_MS = 2 * 60 * 1000;
 
 const ADMIN_ROOM_IDS = [
   '1499105265272754246',
@@ -169,17 +168,11 @@ const RATING_CHANNEL_ID = '1531018869764788446';
 const DONE_VOICE_CHANNEL_ID = '1499086608010449089';
 const BARREN_ROLE_ID = '1486588170282733700';
 
-// ===== قناة الترقيات (لاستخراج تاريخ آخر ترقية لكل إداري) =====
 const PROMOTION_CHANNEL_ID = '1459305425857155308';
-
-// ===== إعداد خاص برتبة الدعم (support) =====
 const SUPPORT_ROLE_ID = '1499162553245499432';
 const SUPPORT_ROLE_LOG_CHANNEL_ID = '1459305788374782164';
-
-// ===== روم سجل ساعات كل إداري (فيه إمبد "Admin Logout" وبداخله حقل Total Time المتراكم) =====
 const HOURS_LOG_CHANNEL_ID = '1513231005815931000';
 
-// ===== إعدادات لوحة تسجيل الدخول/الخروج للإدارة العليا (High Management) =====
 const HM_PANEL_CHANNEL_ID = '1534312045166592171';
 const HM_LOG_CHANNEL_ID = '1534313854329159710';
 const HM_BANNER_PATH = path.join(__dirname, 'hm_banner.png');
@@ -197,7 +190,6 @@ const HM_AUTO_OUT_TIMEOUT_MS = 60 * 1000;
 const hmCheckedIn = new Map();
 const hmLeaveTimers = new Map();
 
-// ===== قائمة الرتب الإدارية المسموح بعرضها في الجرد (بالترتيب المطلوب) =====
 const ALLOWED_ROLE_IDS = [
   '1499162553245499432',
   '1480102405931667467',
@@ -248,10 +240,8 @@ function markSessionEvaluated(sessionId) {
   stmt.run(sessionId);
 }
 
-// ===== تحميل البيانات =====
 const activeLeaves = loadActiveLeaves();
 
-// ===== دوال مساعدة =====
 const MAX_LEAVE_DAYS = 14;
 const LEAVE_PANEL_COLOR = 0xC2410C;
 const LEAVE_BANNER_PATH = path.join(__dirname, 'leave_banner.png');
@@ -269,11 +259,10 @@ const client = new Client({
   ],
 });
 
-// ===== حالة الجلسات النشطة والكول داون =====
 const activeSessions = new Map();
 const cooldownMap = new Map();
-const waitingTimers = new Map(); // للمؤقتات العامة (3 دقائق)
-const customWaitingTimers = new Map(); // للمؤقت الخاص بروم 1483285123008041031 (دقيقتان)
+const waitingTimers = new Map();
+const customWaitingTimers = new Map();
 
 // ============================================================
 // دوال التقييم
@@ -547,7 +536,7 @@ client.on(Events.MessageCreate, async (message) => {
 });
 
 // ============================================================
-// دوال السحب التلقائي المباشر
+// دوال السحب التلقائي
 // ============================================================
 function isDeafened(voiceState) {
   if (!voiceState) return false;
@@ -638,21 +627,16 @@ async function tryPullForAllFreeAdmins(guild) {
   }
 
   if (freeAdmins.length === 0) return;
-
   if (activeSessions.has(candidate.id)) return;
 
   const eligibleAdmins = freeAdmins.filter(({ adminMember }) => {
     const adminCooldownKey = adminMember.id;
     const adminCooldownEnd = cooldownMap.get(adminCooldownKey);
-    if (adminCooldownEnd && adminCooldownEnd > Date.now()) {
-      return false;
-    }
+    if (adminCooldownEnd && adminCooldownEnd > Date.now()) return false;
 
     const pairKey = `${adminMember.id}_${candidate.id}`;
     const pairCooldownEnd = cooldownMap.get(pairKey);
-    if (pairCooldownEnd && pairCooldownEnd > Date.now()) {
-      return false;
-    }
+    if (pairCooldownEnd && pairCooldownEnd > Date.now()) return false;
     return true;
   });
 
@@ -663,21 +647,16 @@ async function tryPullForAllFreeAdmins(guild) {
 
   const { adminMember } = eligibleAdmins[0];
   const adminChannel = adminMember.voice.channel;
-
   if (!adminChannel) return;
 
   try {
     await candidate.voice.setChannel(adminChannel.id, 'سحب تلقائي - جلسة دعم');
-
     activeSessions.set(candidate.id, {
       adminId: adminMember.id,
       startTime: Date.now()
     });
-
     cooldownMap.set(adminMember.id, Date.now() + 15 * 1000);
-
     await sendCitizenNotification(candidate.user, adminMember.user);
-
     console.log(`✅ تم سحب ${candidate.user.tag} إلى ${adminMember.user.tag}`);
   } catch (err) {
     console.error(`⚠️ فشل سحب ${candidate.user.tag}:`, err.message);
@@ -697,7 +676,6 @@ async function endSession(guild, citizenId, adminId, startTime) {
   cooldownMap.set(cooldownKey, Date.now() + 60 * 1000);
 
   const sessionId = `${adminId}_${citizenId}_${startTime}`;
-
   activeSessions.delete(citizenId);
 
   try {
@@ -736,25 +714,24 @@ async function endSession(guild, citizenId, adminId, startTime) {
 }
 
 // ============================================================
-// تسجيل الأوامر
+// تسجيل الأوامر (تم التعديل هنا)
 // ============================================================
 client.once(Events.ClientReady, async (c) => {
   console.log(`🤖 البوت شغال باسم ${c.user.tag}`);
+
+  // ✅ تعريف الأوامر بشكل نظيف وخالٍ من الأحرف الخفية
+  const commands = [
+    { name: 'leave_panel', description: 'لوحة طلبات الإجازات والاستقالات' },
+    { name: 'active_leaves', description: 'عرض الإداريين المجازين' },
+    { name: 'barren', description: 'جرد فريق التفعيل' },
+    { name: 'privacy', description: 'سياسة الخصوصية' },
+    { name: 'hm_panel', description: 'لوحة تسجيل الدخول/الخروج للإدارة' },
+    { name: 'restart', description: 'إعادة تشغيل البوت' }
+  ];
+
   try {
-    const commands = [
-      { name: 'إرسال لوحة طلبات الإجازات والاستقالات', description: 'إرسال لوحة طلبات الإجازات والاستقالات' },
-      { name: 'عرض قائمة الي ماخذين اجازة', description: 'عرض قائمة الإداريين الي ماخذين اجازة' },
-      { name: 'جرد التفعيل', description: 'جرد إحصائيات فريق التفعيل' },
-      { name: 'privacy', description: 'عرض سياسة الخصوصية الخاصة بالبوت' },
-      { name: 'send_highmanagement_panel', description: 'إرسال لوحة تسجيل الدخول والخروج للإدارة العليا' },
-      {
-        name: 'restart',
-        description: 'إعادة تشغيل البوت ( فقط المسؤولين)',
-        default_member_permissions: PermissionFlagsBits.Administrator.toString()
-      }
-    ];
     await c.application.commands.set(commands, GUILD_ID);
-    console.log('✅ تم تسجيل الأوامر.');
+    console.log('✅ تم تسجيل الأوامر بنجاح.');
   } catch (error) {
     console.error('❌ خطأ في تسجيل الأوامر:', error);
   }
@@ -832,19 +809,13 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  // ===== منطق التنبيه العام (3 دقائق) لجميع رومات الانتظار باستثناء الروم الخاص =====
-  const enteredWaitingGeneral = WAITING_CHANNEL_IDS.includes(newState.channelId) && !WAITING_CHANNEL_IDS.includes(oldState.channelId);
-  const leftWaitingGeneral = WAITING_CHANNEL_IDS.includes(oldState.channelId) && !WAITING_CHANNEL_IDS.includes(newState.channelId);
-
-  // نتعامل مع الروم الخاص بشكل منفصل
+  // ===== التنبيه الخاص بروم 1483285123008041031 (دقيقتان) =====
   const isCustomRoom = newState.channelId === CUSTOM_WAITING_ROOM_ID;
   const wasCustomRoom = oldState.channelId === CUSTOM_WAITING_ROOM_ID;
 
-  // === التنبيه الخاص بروم 1483285123008041031 (دقيقتان) ===
   if (isCustomRoom && !wasCustomRoom) {
     const member = await guild.members.fetch(userId).catch(() => null);
     if (member && !hasStaffRole(member)) {
-      // إلغاء أي مؤقت سابق لنفس المستخدم
       if (customWaitingTimers.has(userId)) {
         clearTimeout(customWaitingTimers.get(userId));
         customWaitingTimers.delete(userId);
@@ -858,12 +829,10 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           if (!voiceChannel || voiceChannel.id !== CUSTOM_WAITING_ROOM_ID) return;
           if (hasStaffRole(currentMember)) return;
 
-          // إرسال التنبيه
           const channel = guild.channels.cache.get(CUSTOM_NOTIFICATION_CHANNEL_ID);
           if (channel) {
             await channel.send(`<@&${CUSTOM_MENTION_ROLE_ID}> يوجد شخص في الانتظار، يرجى التوجه لخدمته.`);
           }
-          // حذف المؤقت بعد الإرسال
           customWaitingTimers.delete(userId);
         } catch (err) {
           console.error('❌ خطأ في تنبيه الانتظار الخاص:', err);
@@ -875,7 +844,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  // إذا غادر العضو الروم الخاص قبل انتهاء المؤقت، نلغي المؤقت
   if (!isCustomRoom && wasCustomRoom) {
     if (customWaitingTimers.has(userId)) {
       clearTimeout(customWaitingTimers.get(userId));
@@ -884,8 +852,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  // === التنبيه العام (3 دقائق) لبقية الرومات (باستثناء الروم الخاص) ===
-  // نمنع التنبيه العام على الروم الخاص
+  // ===== التنبيه العام (3 دقائق) لبقية الرومات =====
   const isGeneralWaiting = WAITING_CHANNEL_IDS.includes(newState.channelId) && !WAITING_CHANNEL_IDS.includes(oldState.channelId) && newState.channelId !== CUSTOM_WAITING_ROOM_ID;
   const isLeavingGeneral = WAITING_CHANNEL_IDS.includes(oldState.channelId) && !WAITING_CHANNEL_IDS.includes(newState.channelId) && oldState.channelId !== CUSTOM_WAITING_ROOM_ID;
 
@@ -926,7 +893,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  // ===== محاولة السحب التلقائي عند الدخول إلى أي روم انتظار (بما فيه الخاص) =====
+  // ===== محاولة السحب التلقائي =====
   const enteredAnyWaiting = WAITING_CHANNEL_IDS.includes(newState.channelId) && !WAITING_CHANNEL_IDS.includes(oldState.channelId);
   if (enteredAnyWaiting) {
     const member = await guild.members.fetch(userId).catch(() => null);
@@ -939,7 +906,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  // محاولة سحب إضافية بعد أي تغيير
   try {
     await tryPullForAllFreeAdmins(guild);
   } catch (err) {
@@ -1299,8 +1265,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      // /send_leave_panel
-      if (interaction.commandName === 'send_leave_panel') {
+      // /leave_panel
+      if (interaction.commandName === 'leave_panel') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
         }
@@ -1577,8 +1543,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         console.log('==============================================================\n');
       }
 
-      // /send_hm_panel
-      if (interaction.commandName === 'send_hm_panel') {
+      // /hm_panel
+      if (interaction.commandName === 'hm_panel') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
         }
