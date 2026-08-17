@@ -1,17 +1,14 @@
 const fs = require('fs');
 const path = require('path');
-const http = require('http');
+const express = require('express');
 
-// ===== سيرفر HTTP وهمي لإبقاء Render راضي =====
+// ===== سيرفر Express =====
+const app = express();
 const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-  res.end('✅ البوت شغال.');
-}).listen(PORT, () => {
-  console.log(`🌐 سيرفر HTTP الوهمي شغال على بورت ${PORT}`);
-});
+app.use(express.json());
+app.get('/', (req, res) => res.send('✅ البوت شغال.'));
 
-// ===== حماية عامة من الأخطاء غير الملتقطة =====
+// ===== حماية =====
 process.on('unhandledRejection', (reason) => {
   console.error('⚠️ Unhandled Rejection:', reason);
 });
@@ -35,11 +32,10 @@ const {
   PermissionFlagsBits,
 } = require('discord.js');
 
-// ===== قاعدة بيانات SQLite =====
+// ===== قاعدة بيانات =====
 const Database = require('better-sqlite3');
 const db = new Database('data.db');
 
-// ===== إنشاء الجداول =====
 db.exec(`
   CREATE TABLE IF NOT EXISTS active_leaves (
     user_id TEXT PRIMARY KEY,
@@ -50,7 +46,7 @@ db.exec(`
   );
 `);
 
-// ===== المتغيرات البيئية =====
+// ===== متغيرات البيئة =====
 const {
   BOT_TOKEN,
   GUILD_ID,
@@ -63,7 +59,7 @@ if (!BOT_TOKEN || !GUILD_ID || !WAITING_CHANNEL_ID || !ADMIN_ROLE_ID) {
   process.exit(1);
 }
 
-// ===== رومات الانتظار الإضافية =====
+// ===== رومات الانتظار والإدارة =====
 const ADDITIONAL_WAITING_IDS = [
   '1481398869463138604',
   '1519511668823167116',
@@ -75,7 +71,6 @@ const WAITING_CHANNEL_IDS = [
   ...ADDITIONAL_WAITING_IDS
 ];
 
-// ===== خريطة روم الانتظار -> رومات الإدارة المخصصة =====
 const WAITING_ROOM_ADMIN_MAP = {
   '1519511668823167116': [
     '1531980761039638618',
@@ -84,15 +79,11 @@ const WAITING_ROOM_ADMIN_MAP = {
     '1531982552863215676'
   ],
   '1481398869463138604': [
-    '1499105265272754246',
-    '1499105221383819497',
-    '1499105170716491806',
-    '1525972362246226041',
-    '1499105092933128212',
-    '1499084679083720805',
-    '1499352796435058848',
-    '1499352980120403989',
-    '1499353050907938916'
+    '1538018549581217913',
+    '1538019707960037507',
+    '1538019743217352765',
+    '1538019769674899456',
+    '1538019791334408304'
   ],
   '1483285123008041031': [
     '1499460333214109957',
@@ -108,12 +99,10 @@ const WAITING_ROOM_ADMIN_MAP = {
   ]
 };
 
-// ===== خريطة روم الانتظار -> الرتبة المطلوبة للإداري =====
 const WAITING_ROOM_REQUIRED_ROLE = {
   '1483285123008041031': '1486587636863864862'
 };
 
-// ===== حالة خاصة: رتبة معينة داخل روم انتظار معين =====
 const SPECIAL_ROLE_ID = '1476796533168017428';
 const SPECIAL_WAITING_ROOM_ID = '1519511668823167116';
 const SPECIAL_ADMIN_ROOM_IDS = [
@@ -126,7 +115,10 @@ const SPECIAL_ADMIN_ROOM_IDS = [
   '1499352796435058848',
   '1499352980120403989',
   '1499353050907938916',
-  '1533115980241305860'
+  '1533115980241305860',
+  '1535799453418782800',
+  '1535799489837670520',
+  '1535799510016589904'
 ];
 const SPECIAL_REQUIRED_ADMIN_ROLE_ID = '1499102575918579793';
 
@@ -136,14 +128,11 @@ const LEAVE_PANEL_CHANNEL_ID = '1529440458030321714';
 const LEAVE_ROLE_ID = '1459304469127758027';
 const RESIGNATION_KEEP_ROLE_ID = '1476796533168017428';
 const STAFF_ROLE_IDS = ['1459304407899443396', '1459304410923532481'];
-
 const LEAVE_REQUEST_MENTION_ROLE_IDS = ['1459304407899443396', '1459304410923532481'];
-
 const WAITING_NOTIFICATION_CHANNEL_ID = '1536740110966726656';
 const WAITING_MENTION_ROLE_ID = '1499102575918579793';
 const WAITING_TIMEOUT_MS = 3 * 60 * 1000;
 
-// ===== إعدادات التنبيه الخاص بروم الانتظار 1483285123008041031 =====
 const CUSTOM_WAITING_ROOM_ID = '1483285123008041031';
 const CUSTOM_NOTIFICATION_CHANNEL_ID = '1536786125052444864';
 const CUSTOM_MENTION_ROLE_ID = '1486587636863864862';
@@ -203,6 +192,49 @@ const ALLOWED_ROLE_IDS = [
   '1472352421153083563',
   '1459304436491882742'
 ];
+
+const CENSORSHIP_REPORT_CHANNEL_ID = '1459304931013033994';
+const ACTIVATION_REPORT_CHANNEL_ID = '1480766793248276581';
+const HIGH_STAFF_REPORT_CHANNEL_ID = '1459304917532414052';
+
+const CENSORSHIP_VOICE_CHANNELS = [
+  '1499105265272754246',
+  '1499105221383819497',
+  '1499105170716491806',
+  '1525972362246226041',
+  '1499105092933128212',
+  '1499084679083720805',
+  '1499352796435058848',
+  '1499352980120403989',
+  '1499353050907938916',
+  '1533115980241305860',
+  '1535799453418782800',
+  '1535799489837670520',
+  '1535799510016589904'
+];
+
+const ACTIVATION_VOICE_CHANNELS = [
+  '1483283170265665566',
+  '1483283249416638514',
+  '1483283321789222933',
+  '1483283430379618424',
+  '1483283498419884145',
+  '1493989690766921768',
+  '1499168095561056366',
+  '1499168130910388244',
+  '1499460308262060032',
+  '1499460333214109957'
+];
+
+const HIGH_STAFF_VOICE_CHANNELS = [];
+
+const CENSORSHIP_TEAM_ROLE_ID = '1499102575918579793';
+const CENSORSHIP_ACTIVITY_CHANNEL_ID = '1529933848144510976';
+const CENSORSHIP_BAN_CHANNEL_ID = '1459305185808617594';
+
+// ============================================================
+// دوال مساعدة رئيسية (الإجازات، الجرد، إلخ)
+// ============================================================
 
 function hasStaffRole(member) {
   return STAFF_ROLE_IDS.some((roleId) => member.roles.cache.has(roleId));
@@ -489,6 +521,199 @@ async function getTotalHoursMap(guild, targetIds) {
 }
 
 // ============================================================
+// دوال مساعدة لجرد فريق الرقابة
+// ============================================================
+
+/**
+ * تحسب عدد رسائل "done" بأنماط متعددة لكل عضو في قناة معينة خلال آخر 7 أيام.
+ */
+async function countDoneMessagesPerUser(channel, userIds, cutoffDate) {
+  const counts = new Map();
+  for (const id of userIds) counts.set(id, 0);
+
+  const patterns = [
+    /\bdone\b/i,
+    /عدد المساعدات/i,
+    /تم حل المشكلة/i,
+    /\bnعم\b/i,
+    /\d+\s*done/i,
+    /DONE/i,
+  ];
+
+  let lastId = null;
+  let fetched = 0;
+  const limit = 5000;
+
+  while (fetched < limit) {
+    const options = { limit: 100 };
+    if (lastId) options.before = lastId;
+    const msgs = await channel.messages.fetch(options);
+    if (msgs.size === 0) break;
+
+    for (const [, msg] of msgs) {
+      if (msg.createdTimestamp < cutoffDate) continue;
+      const isDone = patterns.some(pattern => pattern.test(msg.content));
+      if (isDone && counts.has(msg.author.id)) {
+        counts.set(msg.author.id, counts.get(msg.author.id) + 1);
+      }
+    }
+
+    lastId = msgs.last().id;
+    fetched += msgs.size;
+    if (msgs.size < 100) break;
+  }
+
+  return counts;
+}
+
+/**
+ * تحسب عدد رسائل الباند التي تطابق نمطاً معيناً.
+ */
+async function countMessagesWithPattern(channel, userIds, pattern, cutoffDate = null) {
+  const counts = new Map();
+  for (const id of userIds) counts.set(id, 0);
+
+  let lastId = null;
+  let fetched = 0;
+  const limit = 5000;
+
+  while (fetched < limit) {
+    const options = { limit: 100 };
+    if (lastId) options.before = lastId;
+    const msgs = await channel.messages.fetch(options);
+    if (msgs.size === 0) break;
+
+    for (const [, msg] of msgs) {
+      if (cutoffDate && msg.createdTimestamp < cutoffDate) continue;
+      if (pattern.test(msg.content) && counts.has(msg.author.id)) {
+        counts.set(msg.author.id, counts.get(msg.author.id) + 1);
+      }
+    }
+
+    lastId = msgs.last().id;
+    fetched += msgs.size;
+    if (msgs.size < 100) break;
+  }
+
+  return counts;
+}
+
+/**
+ * تجلب جميع التقييمات من قناة التقييمات وتحسب المتوسط لكل إداري.
+ */
+async function getAdminRatings(channel) {
+  const ratings = new Map();
+
+  let lastId = null;
+  let fetched = 0;
+  const limit = 5000;
+
+  while (fetched < limit) {
+    const options = { limit: 100 };
+    if (lastId) options.before = lastId;
+    const msgs = await channel.messages.fetch(options);
+    if (msgs.size === 0) break;
+
+    for (const [, msg] of msgs) {
+      if (msg.embeds && msg.embeds.length > 0) {
+        const embed = msg.embeds[0];
+        if (embed.fields) {
+          const adminField = embed.fields.find(f => f.name && f.name.includes('الإداري'));
+          const ratingField = embed.fields.find(f => f.name && f.name.includes('التقييم'));
+          if (adminField && ratingField) {
+            const match = adminField.value.match(/<@!?(\d+)>/);
+            if (match) {
+              const adminId = match[1];
+              const ratingMatch = ratingField.value.match(/(\d+)\/5/);
+              if (ratingMatch) {
+                const rating = parseInt(ratingMatch[1]);
+                if (!ratings.has(adminId)) ratings.set(adminId, { sum: 0, count: 0 });
+                const data = ratings.get(adminId);
+                data.sum += rating;
+                data.count++;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    lastId = msgs.last().id;
+    fetched += msgs.size;
+    if (msgs.size < 100) break;
+  }
+
+  const result = new Map();
+  for (const [adminId, data] of ratings) {
+    result.set(adminId, {
+      sum: data.sum,
+      count: data.count,
+      average: data.count > 0 ? data.sum / data.count : 0,
+    });
+  }
+  return result;
+}
+
+// ============================================================
+// دوال التقارير الجديدة
+// ============================================================
+async function sendVoiceChannelReport(guild, channelIds, reportChannelId, reportTitle, reportColor = 0x3498db) {
+  try {
+    const reportChannel = guild.channels.cache.get(reportChannelId);
+    if (!reportChannel) {
+      console.error(`❌ قناة التقرير ${reportChannelId} غير موجودة!`);
+      return;
+    }
+
+    const membersInChannels = new Map();
+    let totalMembers = 0;
+
+    for (const channelId of channelIds) {
+      const channel = guild.channels.cache.get(channelId);
+      if (!channel || channel.type !== 2) continue;
+      const members = channel.members;
+      if (members.size > 0) {
+        membersInChannels.set(channelId, members);
+        totalMembers += members.size;
+      }
+    }
+
+    if (totalMembers === 0) {
+      const embed = new EmbedBuilder()
+        .setTitle(`📊 ${reportTitle}`)
+        .setDescription('❌ لا يوجد أعضاء في هذه الرومات حالياً.')
+        .setColor(reportColor)
+        .setTimestamp();
+      await reportChannel.send({ embeds: [embed] });
+      return;
+    }
+
+    let description = '';
+    for (const [channelId, members] of membersInChannels) {
+      const channel = guild.channels.cache.get(channelId);
+      const channelName = channel ? channel.name : channelId;
+      description += `\n**<#${channelId}>** (${members.size} عضو):\n`;
+      for (const [, member] of members) {
+        description += `• ${member.user.tag} (\`${member.id}\`)\n`;
+      }
+      description += '\n';
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle(`📊 ${reportTitle}`)
+      .setDescription(description)
+      .setColor(reportColor)
+      .setFooter({ text: `إجمالي الأعضاء: ${totalMembers}` })
+      .setTimestamp();
+
+    await reportChannel.send({ embeds: [embed] });
+    console.log(`✅ تم إرسال تقرير ${reportTitle} إلى ${reportChannelId}`);
+  } catch (err) {
+    console.error(`❌ خطأ في إرسال تقرير ${reportTitle}:`, err);
+  }
+}
+
+// ============================================================
 // خروج تلقائي للإدارة العليا
 // ============================================================
 async function autoHmCheckout(guild, userId) {
@@ -503,16 +728,13 @@ async function autoHmCheckout(guild, userId) {
 
     const logEmbed = new EmbedBuilder()
       .setColor(HM_OUT_COLOR)
-      .setAuthor({
-        name: user ? user.username : userId,
-        iconURL: user ? user.displayAvatarURL() : undefined
-      })
-      .setTitle('🔴 تسجيل خروج تلقائي (Logout)')
+      .setTitle('Admin Logout')
       .setDescription('تم تسجيل الخروج تلقائياً بعد مغادرة الروم لمدة دقيقة بدون رجوع.')
       .addFields(
-        { name: 'العضو', value: `<@${userId}>`, inline: true },
-        { name: 'الوقت', value: `<t:${nowTimestamp}:F>`, inline: true }
+        { name: 'Admin', value: `<@${userId}>\n${userId}`, inline: false },
+        { name: 'Logout Time', value: `<t:${nowTimestamp}:F>`, inline: true }
       )
+      .setThumbnail(user ? user.displayAvatarURL() : undefined)
       .setTimestamp();
 
     await logChannel.send({ embeds: [logEmbed] });
@@ -602,19 +824,38 @@ async function tryPullForAllFreeAdmins(guild) {
   let targetAdminRoomIds;
   let requiredRoleId;
 
-  const isSpecialCase =
-    waitingChannelId === SPECIAL_WAITING_ROOM_ID &&
-    candidate.roles.cache.has(SPECIAL_ROLE_ID);
+  const SPECIAL_PULL_WAITING_ROOMS = ['1519511668823167116', '1481398869463138604'];
+  const SPECIAL_PULL_REQUIRED_ROLE = '1476796533168017428';
+  const SPECIAL_PULL_TARGET_ROOMS = [
+    '1538016869968248993',
+    '1538019823102070865',
+    '1538019839183032330',
+    '1538019855465455666',
+    '1538019875556032572'
+  ];
 
-  if (isSpecialCase) {
-    targetAdminRoomIds = SPECIAL_ADMIN_ROOM_IDS;
-    requiredRoleId = SPECIAL_REQUIRED_ADMIN_ROLE_ID;
-  } else if (WAITING_ROOM_ADMIN_MAP[waitingChannelId]) {
-    targetAdminRoomIds = WAITING_ROOM_ADMIN_MAP[waitingChannelId];
-    requiredRoleId = WAITING_ROOM_REQUIRED_ROLE[waitingChannelId] || ADMIN_ROLE_ID;
+  if (SPECIAL_PULL_WAITING_ROOMS.includes(waitingChannelId)) {
+    if (!candidate.roles.cache.has(SPECIAL_PULL_REQUIRED_ROLE)) {
+      console.log(`⏳ العضو ${candidate.user.tag} لا يملك الرتبة المطلوبة للدخول إلى روم الدعم المخصص.`);
+      return;
+    }
+    targetAdminRoomIds = SPECIAL_PULL_TARGET_ROOMS;
+    requiredRoleId = SPECIAL_PULL_REQUIRED_ROLE;
   } else {
-    targetAdminRoomIds = ADMIN_ROOM_IDS;
-    requiredRoleId = ADMIN_ROLE_ID;
+    const isSpecialCase =
+      waitingChannelId === SPECIAL_WAITING_ROOM_ID &&
+      candidate.roles.cache.has(SPECIAL_ROLE_ID);
+
+    if (isSpecialCase) {
+      targetAdminRoomIds = SPECIAL_ADMIN_ROOM_IDS;
+      requiredRoleId = SPECIAL_REQUIRED_ADMIN_ROLE_ID;
+    } else if (WAITING_ROOM_ADMIN_MAP[waitingChannelId]) {
+      targetAdminRoomIds = WAITING_ROOM_ADMIN_MAP[waitingChannelId];
+      requiredRoleId = WAITING_ROOM_REQUIRED_ROLE[waitingChannelId] || ADMIN_ROLE_ID;
+    } else {
+      targetAdminRoomIds = ADMIN_ROOM_IDS;
+      requiredRoleId = ADMIN_ROLE_ID;
+    }
   }
 
   const freeAdmins = [];
@@ -714,19 +955,34 @@ async function endSession(guild, citizenId, adminId, startTime) {
 }
 
 // ============================================================
-// تسجيل الأوامر (تم التعديل هنا)
+// تسجيل الأوامر
 // ============================================================
 client.once(Events.ClientReady, async (c) => {
   console.log(`🤖 البوت شغال باسم ${c.user.tag}`);
 
-  // ✅ تعريف الأوامر بشكل نظيف وخالٍ من الأحرف الخفية
   const commands = [
     { name: 'leave_panel', description: 'لوحة طلبات الإجازات والاستقالات' },
-    { name: 'active_leaves', description: 'عرض الإداريين المجازين' },
-    { name: 'barren', description: 'جرد فريق التفعيل' },
+    { name: 'active_leaves', description: 'عرض الإداريين المأجزين' },
+    { name: 'barren', description: 'جرد فريق التفعيل (آخر 7 أيام)' },
+    { name: 'barren_censorship', description: 'جرد فريق الرقابة (آخر 7 أيام)' },
     { name: 'privacy', description: 'سياسة الخصوصية' },
     { name: 'hm_panel', description: 'لوحة تسجيل الدخول/الخروج للإدارة' },
-    { name: 'restart', description: 'إعادة تشغيل البوت' }
+    { name: 'restart', description: 'إعادة تشغيل البوت' },
+    { name: 'censorship_report', description: 'عرض أعضاء رومات الرقابة' },
+    { name: 'activation_report', description: 'عرض أعضاء رومات التفعيل' },
+    { name: 'high_staff_report', description: 'عرض أعضاء رومات الإدارة العليا' },
+    {
+      name: 'clear',
+      description: 'حذف الرسائل من روم محددة',
+      default_member_permissions: PermissionFlagsBits.ManageMessages.toString(),
+      options: [
+        { name: 'channel', description: 'الروم المراد مسح الرسائل منها', type: 7, required: false },
+        { name: 'amount', description: 'عدد الرسائل', type: 4, required: false, min_value: 1, max_value: 100 }
+      ]
+    },
+    // الأوامر الجديدة
+    { name: 'مفتوح', description: 'فتح التفعيل وإرسال إشعار' },
+    { name: 'مغلق', description: 'إغلاق التفعيل وإرسال إشعار' }
   ];
 
   try {
@@ -738,7 +994,7 @@ client.once(Events.ClientReady, async (c) => {
 });
 
 // ============================================================
-// أحداث الصوت (بما فيها التنبيه الخاص بروم 1483285123008041031)
+// أحداث الصوت (بدون STT)
 // ============================================================
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const guild = newState.guild || oldState.guild;
@@ -762,7 +1018,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     const timer = setTimeout(async () => {
       try {
         const currentMember = await guild.members.fetch(userId).catch(() => null);
-        const currentChannelId = currentMember && currentMember.voice ? currentMember.voice.channelId : null;
+        const currentChannelId = currentMember?.voice?.channelId || null;
         const stillOutside = !currentChannelId || !HM_REQUIRED_VOICE_CHANNEL_IDS.includes(currentChannelId);
         if (stillOutside && hmCheckedIn.has(userId)) {
           await autoHmCheckout(guild, userId);
@@ -793,7 +1049,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
       await endSession(guild, userId, adminId, session.startTime);
       return;
     }
-
     if (adminVoice.channelId && !ADMIN_ROOM_IDS.includes(adminVoice.channelId)) {
       await endSession(guild, userId, adminId, session.startTime);
       return;
@@ -802,14 +1057,13 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
       await endSession(guild, userId, adminId, session.startTime);
       return;
     }
-
     if (!adminVoice.channelId) {
       await endSession(guild, userId, adminId, session.startTime);
       return;
     }
   }
 
-  // ===== التنبيه الخاص بروم 1483285123008041031 (دقيقتان) =====
+  // ===== التنبيه الخاص بروم 1483285123008041031 =====
   const isCustomRoom = newState.channelId === CUSTOM_WAITING_ROOM_ID;
   const wasCustomRoom = oldState.channelId === CUSTOM_WAITING_ROOM_ID;
 
@@ -820,7 +1074,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         clearTimeout(customWaitingTimers.get(userId));
         customWaitingTimers.delete(userId);
       }
-
       const timer = setTimeout(async () => {
         try {
           const currentMember = await guild.members.fetch(userId).catch(() => null);
@@ -828,7 +1081,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           const voiceChannel = currentMember.voice.channel;
           if (!voiceChannel || voiceChannel.id !== CUSTOM_WAITING_ROOM_ID) return;
           if (hasStaffRole(currentMember)) return;
-
           const channel = guild.channels.cache.get(CUSTOM_NOTIFICATION_CHANNEL_ID);
           if (channel) {
             await channel.send(`<@&${CUSTOM_MENTION_ROLE_ID}> يوجد شخص في الانتظار، يرجى التوجه لخدمته.`);
@@ -838,12 +1090,10 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           console.error('❌ خطأ في تنبيه الانتظار الخاص:', err);
         }
       }, CUSTOM_WAITING_TIMEOUT_MS);
-
       customWaitingTimers.set(userId, timer);
       console.log(`⏳ بدأ مؤقت دقيقتين للعضو ${userId} في الروم المخصص.`);
     }
   }
-
   if (!isCustomRoom && wasCustomRoom) {
     if (customWaitingTimers.has(userId)) {
       clearTimeout(customWaitingTimers.get(userId));
@@ -852,16 +1102,14 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  // ===== التنبيه العام (3 دقائق) لبقية الرومات =====
+  // ===== التنبيه العام =====
   const isGeneralWaiting = WAITING_CHANNEL_IDS.includes(newState.channelId) && !WAITING_CHANNEL_IDS.includes(oldState.channelId) && newState.channelId !== CUSTOM_WAITING_ROOM_ID;
   const isLeavingGeneral = WAITING_CHANNEL_IDS.includes(oldState.channelId) && !WAITING_CHANNEL_IDS.includes(newState.channelId) && oldState.channelId !== CUSTOM_WAITING_ROOM_ID;
 
   if (isGeneralWaiting) {
     const member = await guild.members.fetch(userId).catch(() => null);
     if (member && !hasStaffRole(member)) {
-      const oldEntry = waitingTimers.get(userId);
-      if (oldEntry) clearTimeout(oldEntry.timeout);
-
+      if (waitingTimers.has(userId)) clearTimeout(waitingTimers.get(userId).timeout);
       const timer = setTimeout(async () => {
         try {
           const currentMember = await guild.members.fetch(userId).catch(() => null);
@@ -869,7 +1117,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           const voiceChannel = currentMember.voice.channel;
           if (!voiceChannel || !WAITING_CHANNEL_IDS.includes(voiceChannel.id)) return;
           if (hasStaffRole(currentMember)) return;
-
           const channel = guild.channels.cache.get(WAITING_NOTIFICATION_CHANNEL_ID);
           if (channel) {
             await channel.send(`<@&${WAITING_MENTION_ROLE_ID}> يوجد شخص في الانتظار، يرجى التوجه لخدمته.`);
@@ -880,37 +1127,23 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           console.error('❌ خطأ في تنبيه الانتظار العام:', err);
         }
       }, WAITING_TIMEOUT_MS);
-
       waitingTimers.set(userId, { timeout: timer, channelId: newState.channelId, sent: false });
     }
   }
-
   if (isLeavingGeneral) {
     const entry = waitingTimers.get(userId);
-    if (entry) {
-      clearTimeout(entry.timeout);
-      waitingTimers.delete(userId);
-    }
+    if (entry) { clearTimeout(entry.timeout); waitingTimers.delete(userId); }
   }
 
-  // ===== محاولة السحب التلقائي =====
+  // ===== السحب التلقائي =====
   const enteredAnyWaiting = WAITING_CHANNEL_IDS.includes(newState.channelId) && !WAITING_CHANNEL_IDS.includes(oldState.channelId);
   if (enteredAnyWaiting) {
     const member = await guild.members.fetch(userId).catch(() => null);
     if (member && !hasStaffRole(member)) {
-      try {
-        await tryPullForAllFreeAdmins(guild);
-      } catch (err) {
-        console.error('❌ خطأ في السحب (enteredWaiting):', err);
-      }
+      try { await tryPullForAllFreeAdmins(guild); } catch (err) { console.error('❌ خطأ في السحب (enteredWaiting):', err); }
     }
   }
-
-  try {
-    await tryPullForAllFreeAdmins(guild);
-  } catch (err) {
-    console.error('خطأ في السحب:', err);
-  }
+  try { await tryPullForAllFreeAdmins(guild); } catch (err) { console.error('خطأ في السحب:', err); }
 });
 
 // ============================================================
@@ -965,7 +1198,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const guild = client.guilds.cache.get(GUILD_ID);
         const channel = guild.channels.cache.get(RATING_CHANNEL_ID);
         if (channel) {
-          const logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
+          const files = [];
+          if (fs.existsSync(SERVER_LOGO_PATH)) {
+            files.push(new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME }));
+          }
+
           const embed = new EmbedBuilder()
             .setColor(ratingColor(rating))
             .setAuthor({ name: `${interaction.user.username} قيّم الخدمة`, iconURL: interaction.user.displayAvatarURL() })
@@ -977,7 +1214,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
               { name: '⭐ التقييم', value: `${stars}\n\`${rating}/5\` — ${ratingLabel(rating)}`, inline: false }
             )
             .setTimestamp();
-          await channel.send({ embeds: [embed], files: [logoFile] });
+          await channel.send({ embeds: [embed], files });
         }
       } catch (e) {
         console.error('❌ خطأ في إرسال التقييم إلى القناة:', e);
@@ -1008,12 +1245,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (logChannel) {
           const logEmbed = new EmbedBuilder()
             .setColor(isIn ? HM_IN_COLOR : HM_OUT_COLOR)
-            .setAuthor({ name: interaction.user.username, iconURL: interaction.user.displayAvatarURL() })
-            .setTitle(isIn ? '🟢 تسجيل دخول (IN)' : '🔴 تسجيل خروج (OUT)')
+            .setTitle(isIn ? 'Admin Login' : 'Admin Logout')
             .addFields(
-              { name: 'العضو', value: `<@${interaction.user.id}>`, inline: true },
-              { name: 'الوقت', value: `<t:${nowTimestamp}:F>`, inline: true }
+              { name: 'Admin', value: `<@${interaction.user.id}>\n${interaction.user.id}`, inline: false },
+              { name: 'Voice Channel', value: `<#${memberVoiceChannelId}>`, inline: true },
+              { name: isIn ? 'Login Time' : 'Logout Time', value: `<t:${nowTimestamp}:F>`, inline: true }
             )
+            .setThumbnail(interaction.user.displayAvatarURL())
             .setTimestamp();
           await logChannel.send({ embeds: [logEmbed] });
         }
@@ -1286,9 +1524,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
           new ButtonBuilder().setCustomId('open_break_modal').setLabel('كسر إجازة').setEmoji('🔓').setStyle(ButtonStyle.Secondary),
           new ButtonBuilder().setCustomId('open_resign_modal').setLabel('استقالة').setEmoji('📝').setStyle(ButtonStyle.Danger)
         );
-        const file = new AttachmentBuilder(LEAVE_BANNER_PATH, { name: LEAVE_BANNER_FILENAME });
+
+        const files = [];
+        if (fs.existsSync(LEAVE_BANNER_PATH)) {
+          files.push(new AttachmentBuilder(LEAVE_BANNER_PATH, { name: LEAVE_BANNER_FILENAME }));
+        }
+
         const channel = await interaction.guild.channels.fetch(LEAVE_EMBED_CHANNEL_ID);
-        await channel.send({ embeds: [panelEmbed], components: [row], files: [file] });
+        await channel.send({ embeds: [panelEmbed], components: [row], files });
         return interaction.reply({ content: `✅ تم إرسال اللوحة إلى <#${LEAVE_EMBED_CHANNEL_ID}>.`, ephemeral: true });
       }
 
@@ -1310,7 +1553,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [new EmbedBuilder().setTitle('📋 الإجازات النشطة').setColor(0x3ba55d).setDescription(desc)] });
       }
 
-      // /barren
+      // ===== أمر جرد فريق التفعيل =====
       if (interaction.commandName === 'barren') {
         if (!hasBarrenRole(interaction.member)) {
           return interaction.reply({ 
@@ -1323,7 +1566,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         const guild = interaction.guild;
         
-        console.log('==================== بدء جرد فريق التفعيل ====================');
+        console.log('==================== بدء جرد فريق التفعيل (آخر 7 أيام) ====================');
         console.log('🔄 جاري جلب جميع أعضاء السيرفر...');
         await guild.members.fetch({ withPresences: false, force: true });
         console.log(`✅ تم جلب ${guild.members.cache.size} عضو.`);
@@ -1361,43 +1604,34 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const rejectChannel = '1484865429158756494';
         const reactivateChannel = '1493565275428225125';
 
-        const days = 30;
+        const days = 7;
         const [activateMsgs, rejectMsgs, reactivateMsgs] = await Promise.all([
           fetchMessagesFromDate(activateChannel, Date.now() - days * 24 * 60 * 60 * 1000),
           fetchMessagesFromDate(rejectChannel, Date.now() - days * 24 * 60 * 60 * 1000),
           fetchMessagesFromDate(reactivateChannel, Date.now() - days * 24 * 60 * 60 * 1000)
         ]);
 
-        console.log(`📊 عدد رسائل التفعيل: ${activateMsgs.length}`);
-        console.log(`📊 عدد رسائل الرفض: ${rejectMsgs.length}`);
-        console.log(`📊 عدد رسائل إعادة التفعيل: ${reactivatesMsgs.length}`);
+        console.log(`📊 عدد رسائل التفعيل (آخر ${days} يوم): ${activateMsgs.length}`);
+        console.log(`📊 عدد رسائل الرفض (آخر ${days} يوم): ${rejectMsgs.length}`);
+        console.log(`📊 عدد رسائل إعادة التفعيل (آخر ${days} يوم): ${reactivateMsgs.length}`);
+
+        const cutoffDate = Date.now() - days * 24 * 60 * 60 * 1000;
 
         const statsById = new Map();
         for (const [id, member] of members) {
-          let promotionDate;
-          if (member.roles.cache.has(SUPPORT_ROLE_ID)) {
-            promotionDate = await resolveSupportRoleDate(guild, id, supportRoleChannelDateMap);
-            if (!promotionDate) {
-              promotionDate = lastPromotionMap.get(id) || Date.now() - 7 * 24 * 60 * 60 * 1000;
-            }
-          } else {
-            promotionDate = lastPromotionMap.get(id) || Date.now() - 7 * 24 * 60 * 60 * 1000;
-          }
-          console.log(`   ⏰ ${member.user.tag} آخر ترقية: ${new Date(promotionDate).toLocaleDateString('ar-SA')}`);
-
-          const activates = activateMsgs.filter(msg => 
-            msg.createdTimestamp >= promotionDate && msg.content.includes(`<@${id}>`)
+          const promotes = activateMsgs.filter(msg => 
+            msg.createdTimestamp >= cutoffDate && msg.content.includes(`<@${id}>`)
           ).length;
           const rejects = rejectMsgs.filter(msg => 
-            msg.createdTimestamp >= promotionDate && msg.content.includes(`<@${id}>`)
+            msg.createdTimestamp >= cutoffDate && msg.content.includes(`<@${id}>`)
           ).length;
           const reactivates = reactivateMsgs.filter(msg => 
-            msg.createdTimestamp >= promotionDate && msg.content.includes(`<@${id}>`)
+            msg.createdTimestamp >= cutoffDate && msg.content.includes(`<@${id}>`)
           ).length;
 
           const totalSeconds = totalHoursMap.get(id) || 0;
 
-          statsById.set(id, { member, activates, rejects, reactivates, promotionDate, totalSeconds });
+          statsById.set(id, { member, activates: promotes, rejects, reactivates, totalSeconds });
         }
 
         const assignedIds = new Set();
@@ -1432,13 +1666,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
           bodyText += `\n__**${roleLabel}**__ — \u200E<@&${group.roleId}>\u200E\n`;
           bodyText += `━━━━━━━━━━━━━━━━━━\n`;
           for (const stat of group.entries) {
-            const promotionDateStr = new Date(stat.promotionDate).toLocaleDateString('ar-SA');
             bodyText += `\u200E<@${stat.member.id}>\u200E\n`;
-            bodyText += `▪️ **تفعيل شخص:** ${stat.activates}\n`;
-            bodyText += `▪️ **رفض شخص:** ${stat.rejects}\n`;
-            bodyText += `▪️ **إعادة تفعيل شخص:** ${stat.reactivates}\n`;
-            bodyText += `▪️ **عدد ساعات الشخص:** ${formatSecondsToHoursText(stat.totalSeconds)}\n`;
-            bodyText += `▪️ **آخر ترقية:** ${promotionDateStr}\n\n`;
+            bodyText += `▪️ **تفعيل شخص (آخر 7 أيام):** ${stat.activates}\n`;
+            bodyText += `▪️ **رفض شخص (آخر 7 أيام):** ${stat.rejects}\n`;
+            bodyText += `▪️ **إعادة تفعيل شخص (آخر 7 أيام):** ${stat.reactivates}\n`;
+            bodyText += `▪️ **عدد ساعات الشخص:** ${formatSecondsToHoursText(stat.totalSeconds)}\n\n`;
             totalCount++;
           }
         }
@@ -1447,26 +1679,28 @@ client.on(Events.InteractionCreate, async (interaction) => {
           bodyText += `\n__**بدون رتبة من القائمة**__\n`;
           bodyText += `━━━━━━━━━━━━━━━━━━\n`;
           for (const stat of noRoleEntries) {
-            const promotionDateStr = new Date(stat.promotionDate).toLocaleDateString('ar-SA');
             bodyText += `\u200E<@${stat.member.id}>\u200E\n`;
-            bodyText += `▪️ **تفعيل شخص:** ${stat.activates}\n`;
-            bodyText += `▪️ **رفض شخص:** ${stat.rejects}\n`;
-            bodyText += `▪️ **إعادة تفعيل شخص:** ${stat.reactivates}\n`;
-            bodyText += `▪️ **عدد ساعات الشخص:** ${formatSecondsToHoursText(stat.totalSeconds)}\n`;
-            bodyText += `▪️ **آخر ترقية:** ${promotionDateStr}\n\n`;
+            bodyText += `▪️ **تفعيل شخص (آخر 7 أيام):** ${stat.activates}\n`;
+            bodyText += `▪️ **رفض شخص (آخر 7 أيام):** ${stat.rejects}\n`;
+            bodyText += `▪️ **إعادة تفعيل شخص (آخر 7 أيام):** ${stat.reactivates}\n`;
+            bodyText += `▪️ **عدد ساعات الشخص:** ${formatSecondsToHoursText(stat.totalSeconds)}\n\n`;
             totalCount++;
           }
         }
 
-        const header = `📊 جرد فريق التفعيل (منذ آخر ترقية لكل عضو)\n\n`;
+        const header = `📊 جرد فريق التفعيل (آخر 7 أيام)\n\n`;
         const footer = `\n**تم جرد ${totalCount} شخص.**`;
 
         const MAX_MSG_LENGTH = 2000;
         const fullText = header + bodyText + footer;
 
+        const files = [];
+        if (fs.existsSync(SERVER_LOGO_PATH)) {
+          files.push(new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME }));
+        }
+
         if (fullText.length <= MAX_MSG_LENGTH) {
-          const logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
-          await interaction.editReply({ content: fullText, files: [logoFile] });
+          await interaction.editReply({ content: fullText, files });
           console.log('✅ تم إرسال النص كاملاً.');
         } else {
           const parts = [];
@@ -1484,8 +1718,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           if (currentPart) parts.push(currentPart);
 
           console.log(`📊 عدد الأجزاء: ${parts.length}`);
-
-          const logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
 
           for (let i = 0; i < parts.length; i++) {
             let content;
@@ -1514,13 +1746,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 if (i === parts.length - 1 && j === subParts.length - 1) {
                   const finalContent = subContent + footer;
                   if (j === 0 && i === 0) {
-                    await interaction.editReply({ content: finalContent, files: [logoFile] });
+                    await interaction.editReply({ content: finalContent, files });
                   } else {
                     await interaction.followUp({ content: finalContent });
                   }
                 } else {
                   if (j === 0 && i === 0) {
-                    await interaction.editReply({ content: subContent, files: [logoFile] });
+                    await interaction.editReply({ content: subContent, files });
                   } else {
                     await interaction.followUp({ content: subContent });
                   }
@@ -1530,7 +1762,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             }
 
             if (i === 0) {
-              await interaction.editReply({ content: content, files: [logoFile] });
+              await interaction.editReply({ content: content, files });
             } else {
               await interaction.followUp({ content: content });
             }
@@ -1539,7 +1771,236 @@ client.on(Events.InteractionCreate, async (interaction) => {
           console.log('✅ تم إرسال جميع الأجزاء بنجاح.');
         }
 
-        console.log(`✅ اكتمل الجرد: ${totalCount} شخص.`);
+        console.log(`✅ اكتمل الجرد (آخر 7 أيام): ${totalCount} شخص.`);
+        console.log('==============================================================\n');
+      }
+
+      // ===== /barren_censorship =====
+      if (interaction.commandName === 'barren_censorship') {
+        if (!hasBarrenRole(interaction.member)) {
+          return interaction.reply({
+            content: '❌ هذا الأمر مخصص لأعضاء رتبة محددة فقط.',
+            ephemeral: true
+          });
+        }
+
+        await interaction.deferReply();
+
+        const guild = interaction.guild;
+
+        console.log('==================== بدء جرد فريق الرقابة ====================');
+        console.log('🔄 جاري جلب جميع أعضاء السيرفر...');
+        await guild.members.fetch({ withPresences: false, force: true });
+        console.log(`✅ تم جلب ${guild.members.cache.size} عضو.`);
+
+        const targetRoleId = CENSORSHIP_TEAM_ROLE_ID;
+        console.log(`🎯 الرتبة المستهدفة: ${targetRoleId}`);
+
+        const role = guild.roles.cache.get(targetRoleId);
+        if (!role) {
+          console.log('❌ الرتبة غير موجودة!');
+          return interaction.editReply({ content: '❌ الرتبة غير موجودة.' });
+        }
+        console.log(`✅ تم العثور على الرتبة: "${role.name}" (${role.id})`);
+
+        const members = role.members;
+        console.log(`📊 عدد الأعضاء في role.members: ${members.size}`);
+
+        if (members.size === 0) {
+          return interaction.editReply({ content: '❌ لا يوجد أعضاء في فريق الرقابة.' });
+        }
+
+        const cutoffDate = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+        const activityChannel = guild.channels.cache.get(CENSORSHIP_ACTIVITY_CHANNEL_ID);
+        if (!activityChannel) {
+          console.error(`❌ قناة النشاط ${CENSORSHIP_ACTIVITY_CHANNEL_ID} غير موجودة!`);
+          return interaction.editReply({ content: '❌ قناة النشاط غير موجودة.' });
+        }
+
+        console.log('🔄 حساب رسائل "done" بأنماط متعددة من آخر 7 أيام...');
+        const doneCounts = await countDoneMessagesPerUser(activityChannel, new Set(members.keys()), cutoffDate);
+        console.log(`✅ تم حساب رسائل "done" لـ ${doneCounts.size} عضو.`);
+
+        const banPattern = /باند|بان|طرد|حظر/i;
+        const banChannel = guild.channels.cache.get(CENSORSHIP_BAN_CHANNEL_ID);
+        if (!banChannel) {
+          console.error(`❌ قناة الباند ${CENSORSHIP_BAN_CHANNEL_ID} غير موجودة!`);
+          return interaction.editReply({ content: '❌ قناة الباند غير موجودة.' });
+        }
+
+        console.log('🔄 حساب رسائل الباند التي تطابق النمط...');
+        const banCounts = await countMessagesWithPattern(banChannel, new Set(members.keys()), banPattern);
+        console.log(`✅ تم حساب رسائل الباند لـ ${banCounts.size} عضو.`);
+
+        const ratingChannel = guild.channels.cache.get(RATING_CHANNEL_ID);
+        if (!ratingChannel) {
+          console.error(`❌ قناة التقييمات ${RATING_CHANNEL_ID} غير موجودة!`);
+          return interaction.editReply({ content: '❌ قناة التقييمات غير موجودة.' });
+        }
+
+        console.log('🔄 جلب جميع التقييمات من قناة التقييمات...');
+        const ratingsData = await getAdminRatings(ratingChannel);
+        console.log(`✅ تم جلب تقييمات لـ ${ratingsData.size} إداري.`);
+
+        const statsById = new Map();
+        for (const [id, member] of members) {
+          const doneCount = doneCounts.get(id) || 0;
+          const bans = banCounts.get(id) || 0;
+          const ratingInfo = ratingsData.get(id);
+          const avgRating = ratingInfo ? ratingInfo.average : 0;
+          const ratingCount = ratingInfo ? ratingInfo.count : 0;
+
+          statsById.set(id, {
+            member,
+            doneCount,
+            bans,
+            avgRating,
+            ratingCount
+          });
+        }
+
+        const assignedIds = new Set();
+        const groupedByRole = [];
+
+        for (const roleId of ALLOWED_ROLE_IDS) {
+          const roleObj = guild.roles.cache.get(roleId);
+          const entries = [];
+          for (const [id, stat] of statsById) {
+            if (assignedIds.has(id)) continue;
+            if (stat.member.roles.cache.has(roleId)) {
+              entries.push(stat);
+              assignedIds.add(id);
+            }
+          }
+          entries.sort((a, b) => b.doneCount - a.doneCount || b.avgRating - a.avgRating);
+          groupedByRole.push({ roleId, roleObj, entries });
+        }
+
+        const noRoleEntries = [];
+        for (const [id, stat] of statsById) {
+          if (!assignedIds.has(id)) noRoleEntries.push(stat);
+        }
+        noRoleEntries.sort((a, b) => b.doneCount - a.doneCount || b.avgRating - a.avgRating);
+
+        let bodyText = '';
+        let totalCount = 0;
+
+        for (const group of groupedByRole) {
+          if (group.entries.length === 0) continue;
+          const roleLabel = group.roleObj ? group.roleObj.name : 'رتبة غير موجودة';
+          bodyText += `\n__**${roleLabel}**__ — \u200E<@&${group.roleId}>\u200E\n`;
+          bodyText += `━━━━━━━━━━━━━━━━━━\n`;
+          for (const stat of group.entries) {
+            const avgRatingStr = stat.avgRating ? stat.avgRating.toFixed(1) : '0.0';
+            const stars = stat.avgRating ? ratingStarsBar(Math.round(stat.avgRating)) : '☆☆☆☆☆';
+            bodyText += `:black_small_square: **الاسم:** <@${stat.member.id}>\n`;
+            bodyText += `:black_small_square: **الدن :** ${stat.doneCount}\n`;
+            bodyText += `:black_small_square: **كم بند شخص :** ${stat.bans}\n`;
+            bodyText += `:black_small_square: **التقييمات :** ${avgRatingStr} / 5 ${stars} (${stat.ratingCount} تقييم)\n\n`;
+            totalCount++;
+          }
+        }
+
+        if (noRoleEntries.length > 0) {
+          bodyText += `\n__**بدون رتبة من القائمة**__\n`;
+          bodyText += `━━━━━━━━━━━━━━━━━━\n`;
+          for (const stat of noRoleEntries) {
+            const avgRatingStr = stat.avgRating ? stat.avgRating.toFixed(1) : '0.0';
+            const stars = stat.avgRating ? ratingStarsBar(Math.round(stat.avgRating)) : '☆☆☆☆☆';
+            bodyText += `:black_small_square: **الاسم:** <@${stat.member.id}>\n`;
+            bodyText += `:black_small_square: **الرتبة :** بدون رتبة من القائمة\n`;
+            bodyText += `:black_small_square: **الدن :** ${stat.doneCount}\n`;
+            bodyText += `:black_small_square: **كم بند شخص :** ${stat.bans}\n`;
+            bodyText += `:black_small_square: **التقييمات :** ${avgRatingStr} / 5 ${stars} (${stat.ratingCount} تقييم)\n\n`;
+            totalCount++;
+          }
+        }
+
+        const header = `📊 جرد فريق الرقابة (آخر 7 أيام)\n\n`;
+        const footer = `\n**تم جرد ${totalCount} شخص.**`;
+
+        const MAX_MSG_LENGTH = 2000;
+        const fullText = header + bodyText + footer;
+
+        const files = [];
+        if (fs.existsSync(SERVER_LOGO_PATH)) {
+          files.push(new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME }));
+        }
+
+        if (fullText.length <= MAX_MSG_LENGTH) {
+          await interaction.editReply({ content: fullText, files });
+          console.log('✅ تم إرسال النص كاملاً.');
+        } else {
+          const parts = [];
+          let currentPart = '';
+          const lines = bodyText.split('\n');
+          for (const line of lines) {
+            const testPart = currentPart + line + '\n';
+            const testFull = header + testPart + footer;
+            if (testFull.length > MAX_MSG_LENGTH && currentPart.length > 0) {
+              parts.push(currentPart);
+              currentPart = '';
+            }
+            currentPart += (currentPart ? '\n' : '') + line;
+          }
+          if (currentPart) parts.push(currentPart);
+
+          console.log(`📊 عدد الأجزاء: ${parts.length}`);
+
+          for (let i = 0; i < parts.length; i++) {
+            let content;
+            if (i === 0) {
+              content = header + parts[i];
+            } else if (i === parts.length - 1) {
+              content = parts[i] + footer;
+            } else {
+              content = parts[i];
+            }
+
+            if (content.length > MAX_MSG_LENGTH) {
+              const subParts = [];
+              let sub = '';
+              const subLines = content.split('\n');
+              for (const sl of subLines) {
+                if ((sub + sl + '\n').length > MAX_MSG_LENGTH) {
+                  subParts.push(sub);
+                  sub = '';
+                }
+                sub += (sub ? '\n' : '') + sl;
+              }
+              if (sub) subParts.push(sub);
+              for (let j = 0; j < subParts.length; j++) {
+                const subContent = (i === 0 && j === 0) ? header + subParts[j] : subParts[j];
+                if (i === parts.length - 1 && j === subParts.length - 1) {
+                  const finalContent = subContent + footer;
+                  if (j === 0 && i === 0) {
+                    await interaction.editReply({ content: finalContent, files });
+                  } else {
+                    await interaction.followUp({ content: finalContent });
+                  }
+                } else {
+                  if (j === 0 && i === 0) {
+                    await interaction.editReply({ content: subContent, files });
+                  } else {
+                    await interaction.followUp({ content: subContent });
+                  }
+                }
+              }
+              continue;
+            }
+
+            if (i === 0) {
+              await interaction.editReply({ content: content, files });
+            } else {
+              await interaction.followUp({ content: content });
+            }
+            console.log(`✅ تم إرسال الجزء ${i+1}`);
+          }
+          console.log('✅ تم إرسال جميع الأجزاء بنجاح.');
+        }
+
+        console.log(`✅ اكتمل جرد فريق الرقابة: ${totalCount} شخص.`);
         console.log('==============================================================\n');
       }
 
@@ -1550,12 +2011,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         const hmEmbed = new EmbedBuilder()
-          .setTitle('Admins Login - Logout')
+          .setTitle('HighMangment Login - Logout')
           .setDescription(`• Login : تسجيل دخول\n• Logout : تسجيل خروج`)
           .setColor(0x2b2d31)
-          .setFooter({ 
-            text: 'Powered By [ First Town - Development Team ]' 
-          })
           .setTimestamp();
 
         const hmRow = new ActionRowBuilder().addComponents(
@@ -1568,7 +2026,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
           hmFiles.push(new AttachmentBuilder(HM_BANNER_PATH, { name: HM_BANNER_FILENAME }));
           hmEmbed.setImage(`attachment://${HM_BANNER_FILENAME}`);
         } else {
-          console.error(`⚠️ ملف البنر غير موجود على السيرفر: ${HM_BANNER_PATH} — سيتم إرسال اللوحة بدون صورة.`);
+          console.error(`⚠️ ملف البنر غير موجود: ${HM_BANNER_PATH}`);
+        }
+        if (fs.existsSync(SERVER_LOGO_PATH)) {
+          hmFiles.push(new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME }));
+          hmEmbed.setThumbnail(`attachment://${SERVER_LOGO_FILENAME}`);
+        } else {
+          console.error(`⚠️ ملف اللوقو غير موجود: ${SERVER_LOGO_PATH}`);
         }
 
         try {
@@ -1600,6 +2064,144 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
         }
       }
+
+      // ===== أوامر التقارير الجديدة =====
+      if (interaction.commandName === 'censorship_report') {
+        if (!hasStaffRole(interaction.member)) {
+          return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
+        }
+        await interaction.reply({ content: '🔄 جاري إرسال تقرير رومات الرقابة...', ephemeral: true });
+        const guild = interaction.guild;
+        await sendVoiceChannelReport(guild, CENSORSHIP_VOICE_CHANNELS, CENSORSHIP_REPORT_CHANNEL_ID, 'تقرير رومات الرقابة', 0xe74c3c);
+        return;
+      }
+
+      if (interaction.commandName === 'activation_report') {
+        if (!hasStaffRole(interaction.member)) {
+          return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
+        }
+        await interaction.reply({ content: '🔄 جاري إرسال تقرير رومات التفعيل...', ephemeral: true });
+        const guild = interaction.guild;
+        await sendVoiceChannelReport(guild, ACTIVATION_VOICE_CHANNELS, ACTIVATION_REPORT_CHANNEL_ID, 'تقرير رومات التفعيل', 0x2ecc71);
+        return;
+      }
+
+      if (interaction.commandName === 'high_staff_report') {
+        if (!hasStaffRole(interaction.member)) {
+          return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
+        }
+        await interaction.reply({ content: '🔄 جاري إرسال تقرير رومات الإدارة العليا...', ephemeral: true });
+        const guild = interaction.guild;
+        await sendVoiceChannelReport(guild, HIGH_STAFF_VOICE_CHANNELS, HIGH_STAFF_REPORT_CHANNEL_ID, 'تقرير رومات الإدارة العليا', 0x9b59b6);
+        return;
+      }
+
+      // ===== أمر clear (حذف الرسائل) =====
+      if (interaction.commandName === 'clear') {
+        if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages) && !hasStaffRole(interaction.member)) {
+          return interaction.reply({ content: '❌ ليس لديك صلاحية لاستخدام هذا الأمر.', flags: 64 });
+        }
+
+        const targetChannel = interaction.options.getChannel('channel') || interaction.channel;
+        const amount = interaction.options.getInteger('amount');
+
+        if (!targetChannel.isTextBased()) {
+          return interaction.reply({ content: '❌ يجب تحديد روم نصية فقط.', flags: 64 });
+        }
+
+        await interaction.deferReply({ flags: 64 });
+
+        try {
+          let deletedCount = 0;
+
+          if (amount) {
+            const messages = await targetChannel.messages.fetch({ limit: amount });
+            const deleted = await targetChannel.bulkDelete(messages, true);
+            deletedCount = deleted.size;
+          } else {
+            let fetched;
+            do {
+              fetched = await targetChannel.messages.fetch({ limit: 100 });
+              if (fetched.size > 0) {
+                const deleted = await targetChannel.bulkDelete(fetched, true);
+                deletedCount += deleted.size;
+                if (deleted.size === 0) break;
+              }
+            } while (fetched.size >= 2);
+          }
+
+          return interaction.editReply({
+            content: `✅ تم بنجاح حذف **${deletedCount}** رسالة من الروم ${targetChannel}.`
+          });
+
+        } catch (err) {
+          console.error('❌ خطأ أثناء تنفيذ أمر clear:', err);
+          return interaction.editReply({
+            content: '⚠️ حدث خطأ أثناء تنفيذ عملية الحذف. قد تكون الرسائل أقدم من 14 يومًا ولا يمكن حذفها دفعة واحدة.'
+          });
+        }
+      }
+
+      // ===== أوامر التفعيل الجديدة: /مفتوح و /مغلق =====
+      if (interaction.commandName === 'مفتوح') {
+        // التحقق من الصلاحية (الرتب المسموحة)
+        const allowedRoleIds = ['1486588170282733700', '1524667894711980173'];
+        const memberRoles = interaction.member.roles.cache.map(r => r.id);
+        const hasPermission = allowedRoleIds.some(roleId => memberRoles.includes(roleId));
+        if (!hasPermission) {
+          return interaction.reply({ content: '❌ ليس لديك الصلاحية لاستخدام هذا الأمر.', ephemeral: true });
+        }
+
+        const targetChannelId = '1461735934499487754';
+        const channel = interaction.guild.channels.cache.get(targetChannelId);
+        if (!channel) {
+          return interaction.reply({ content: '❌ القناة المحددة غير موجودة.', ephemeral: true });
+        }
+
+        const message = `**حالة التفعيل [مفتوح  <:z5:1470889445602365571>  ]**
+
+https://discord.com/channels/1403099156016533557/1483285123008041031
+
+***||@everyone||***`;
+
+        try {
+          await channel.send(message);
+          return interaction.reply({ content: '✅ تم إرسال إشعار التفعيل المفتوح.', ephemeral: true });
+        } catch (err) {
+          console.error('❌ خطأ في إرسال رسالة /مفتوح:', err);
+          return interaction.reply({ content: '❌ حدث خطأ أثناء إرسال الرسالة.', ephemeral: true });
+        }
+      }
+
+      if (interaction.commandName === 'مغلق') {
+        // التحقق من الصلاحية
+        const allowedRoleIds = ['1486588170282733700', '1524667894711980173'];
+        const memberRoles = interaction.member.roles.cache.map(r => r.id);
+        const hasPermission = allowedRoleIds.some(roleId => memberRoles.includes(roleId));
+        if (!hasPermission) {
+          return interaction.reply({ content: '❌ ليس لديك الصلاحية لاستخدام هذا الأمر.', ephemeral: true });
+        }
+
+        const targetChannelId = '1461735934499487754';
+        const channel = interaction.guild.channels.cache.get(targetChannelId);
+        if (!channel) {
+          return interaction.reply({ content: '❌ القناة المحددة غير موجودة.', ephemeral: true });
+        }
+
+        const message = `**حالة التفعيل [مغلق❌   ]**
+
+https://discord.com/channels/1403099156016533557/1483285123008041031
+
+***||@everyone||***`;
+
+        try {
+          await channel.send(message);
+          return interaction.reply({ content: '✅ تم إرسال إشعار التفعيل المغلق.', ephemeral: true });
+        } catch (err) {
+          console.error('❌ خطأ في إرسال رسالة /مغلق:', err);
+          return interaction.reply({ content: '❌ حدث خطأ أثناء إرسال الرسالة.', ephemeral: true });
+        }
+      }
     }
   } catch (error) {
     console.error('❌ خطأ في التفاعل:', error);
@@ -1610,6 +2212,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   }
 });
+
+app.listen(PORT, () => console.log(`🌐 سيرفر HTTP شغال على بورت ${PORT} (فحص Render فقط).`));
 
 // ============================================================
 // حفظ البيانات عند الإغلاق
