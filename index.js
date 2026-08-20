@@ -815,6 +815,7 @@ async function sendCitizenNotification(citizenUser, adminUser) {
   }
 }
 
+// ========== الدالة المعدلة tryPullForAllFreeAdmins ==========
 async function tryPullForAllFreeAdmins(guild) {
   const waitingData = getNextEligibleWaitingMember(guild);
   if (!waitingData) return;
@@ -823,41 +824,70 @@ async function tryPullForAllFreeAdmins(guild) {
 
   let targetAdminRoomIds;
   let requiredRoleId;
+  let cooldownSeconds = 15; // القيمة الافتراضية
 
-  const SPECIAL_PULL_WAITING_ROOMS = ['1519511668823167116', '1481398869463138604'];
-  const SPECIAL_PULL_REQUIRED_ROLE = '1476796533168017428';
-  const SPECIAL_PULL_TARGET_ROOMS = [
-    '1538016869968248993',
-    '1538019823102070865',
-    '1538019839183032330',
-    '1538019855465455666',
-    '1538019875556032572'
-  ];
+  // ---- الحالة الخاصة لروم 1519511668823167116 ----
+  if (waitingChannelId === '1519511668823167116') {
+    // أي عضو يدخل يُسحب (لا نتحقق من رتبة العضو)
+    targetAdminRoomIds = [
+      '1538435076969209896',
+      '1538435049958154240',
+      '1538258330961846402',
+      '1538258232793894943',
+      '1538019791334408304',
+      '1538019769674899456',
+      '1538019743217352765',
+      '1538019707960037507',
+      '1538018549581217913'
+    ];
+    requiredRoleId = '1499102575918579793';
+    cooldownSeconds = 30;
+  }
+  // ---- الحالة الخاصة لروم 1483285123008041031 ----
+  else if (waitingChannelId === '1483285123008041031') {
+    // نستخدم القائمة الموجودة في WAITING_ROOM_ADMIN_MAP
+    targetAdminRoomIds = WAITING_ROOM_ADMIN_MAP[waitingChannelId] || ADMIN_ROOM_IDS;
+    requiredRoleId = WAITING_ROOM_REQUIRED_ROLE[waitingChannelId] || ADMIN_ROLE_ID;
+    cooldownSeconds = 30;
+  }
+  // ---- الحالات الأخرى (المنطق الأصلي) ----
+  else {
+    const SPECIAL_PULL_WAITING_ROOMS = ['1519511668823167116', '1481398869463138604'];
+    const SPECIAL_PULL_REQUIRED_ROLE = '1476796533168017428';
+    const SPECIAL_PULL_TARGET_ROOMS = [
+      '1538016869968248993',
+      '1538019823102070865',
+      '1538019839183032330',
+      '1538019855465455666',
+      '1538019875556032572'
+    ];
 
-  if (SPECIAL_PULL_WAITING_ROOMS.includes(waitingChannelId)) {
-    if (!candidate.roles.cache.has(SPECIAL_PULL_REQUIRED_ROLE)) {
-      console.log(`⏳ العضو ${candidate.user.tag} لا يملك الرتبة المطلوبة للدخول إلى روم الدعم المخصص.`);
-      return;
-    }
-    targetAdminRoomIds = SPECIAL_PULL_TARGET_ROOMS;
-    requiredRoleId = SPECIAL_PULL_REQUIRED_ROLE;
-  } else {
-    const isSpecialCase =
-      waitingChannelId === SPECIAL_WAITING_ROOM_ID &&
-      candidate.roles.cache.has(SPECIAL_ROLE_ID);
-
-    if (isSpecialCase) {
-      targetAdminRoomIds = SPECIAL_ADMIN_ROOM_IDS;
-      requiredRoleId = SPECIAL_REQUIRED_ADMIN_ROLE_ID;
-    } else if (WAITING_ROOM_ADMIN_MAP[waitingChannelId]) {
-      targetAdminRoomIds = WAITING_ROOM_ADMIN_MAP[waitingChannelId];
-      requiredRoleId = WAITING_ROOM_REQUIRED_ROLE[waitingChannelId] || ADMIN_ROLE_ID;
+    if (SPECIAL_PULL_WAITING_ROOMS.includes(waitingChannelId)) {
+      if (!candidate.roles.cache.has(SPECIAL_PULL_REQUIRED_ROLE)) {
+        console.log(`⏳ العضو ${candidate.user.tag} لا يملك الرتبة المطلوبة للدخول إلى روم الدعم المخصص.`);
+        return;
+      }
+      targetAdminRoomIds = SPECIAL_PULL_TARGET_ROOMS;
+      requiredRoleId = SPECIAL_PULL_REQUIRED_ROLE;
     } else {
-      targetAdminRoomIds = ADMIN_ROOM_IDS;
-      requiredRoleId = ADMIN_ROLE_ID;
+      const isSpecialCase =
+        waitingChannelId === SPECIAL_WAITING_ROOM_ID &&
+        candidate.roles.cache.has(SPECIAL_ROLE_ID);
+
+      if (isSpecialCase) {
+        targetAdminRoomIds = SPECIAL_ADMIN_ROOM_IDS;
+        requiredRoleId = SPECIAL_REQUIRED_ADMIN_ROLE_ID;
+      } else if (WAITING_ROOM_ADMIN_MAP[waitingChannelId]) {
+        targetAdminRoomIds = WAITING_ROOM_ADMIN_MAP[waitingChannelId];
+        requiredRoleId = WAITING_ROOM_REQUIRED_ROLE[waitingChannelId] || ADMIN_ROLE_ID;
+      } else {
+        targetAdminRoomIds = ADMIN_ROOM_IDS;
+        requiredRoleId = ADMIN_ROLE_ID;
+      }
     }
   }
 
+  // البحث عن الإداريين المتفرغين في الرومات المستهدفة
   const freeAdmins = [];
   for (const roomId of targetAdminRoomIds) {
     const channel = guild.channels.cache.get(roomId);
@@ -870,9 +900,9 @@ async function tryPullForAllFreeAdmins(guild) {
   if (freeAdmins.length === 0) return;
   if (activeSessions.has(candidate.id)) return;
 
+  // تصفية الإداريين حسب الكول داون (العام والزوجي)
   const eligibleAdmins = freeAdmins.filter(({ adminMember }) => {
-    const adminCooldownKey = adminMember.id;
-    const adminCooldownEnd = cooldownMap.get(adminCooldownKey);
+    const adminCooldownEnd = cooldownMap.get(adminMember.id);
     if (adminCooldownEnd && adminCooldownEnd > Date.now()) return false;
 
     const pairKey = `${adminMember.id}_${candidate.id}`;
@@ -896,13 +926,15 @@ async function tryPullForAllFreeAdmins(guild) {
       adminId: adminMember.id,
       startTime: Date.now()
     });
-    cooldownMap.set(adminMember.id, Date.now() + 15 * 1000);
+    // استخدام مدة الكول داون المحددة (30 ثانية للحالتين الخاصتين، 15 ثانية للباقي)
+    cooldownMap.set(adminMember.id, Date.now() + cooldownSeconds * 1000);
     await sendCitizenNotification(candidate.user, adminMember.user);
     console.log(`✅ تم سحب ${candidate.user.tag} إلى ${adminMember.user.tag}`);
   } catch (err) {
     console.error(`⚠️ فشل سحب ${candidate.user.tag}:`, err.message);
   }
 }
+// ========== نهاية الدالة المعدلة ==========
 
 // ============================================================
 // دالة إنهاء الجلسة مع إرسال تقييم
@@ -980,7 +1012,6 @@ client.once(Events.ClientReady, async (c) => {
         { name: 'amount', description: 'عدد الرسائل', type: 4, required: false, min_value: 1, max_value: 100 }
       ]
     },
-    // الأوامر الجديدة
     { name: 'مفتوح', description: 'فتح التفعيل وإرسال إشعار' },
     { name: 'مغلق', description: 'إغلاق التفعيل وإرسال إشعار' }
   ];
@@ -2144,7 +2175,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       // ===== أوامر التفعيل الجديدة: /مفتوح و /مغلق =====
       if (interaction.commandName === 'مفتوح') {
-        // التحقق من الصلاحية (الرتب المسموحة)
         const allowedRoleIds = ['1486588170282733700', '1524667894711980173'];
         const memberRoles = interaction.member.roles.cache.map(r => r.id);
         const hasPermission = allowedRoleIds.some(roleId => memberRoles.includes(roleId));
@@ -2174,7 +2204,6 @@ https://discord.com/channels/1403099156016533557/1483285123008041031
       }
 
       if (interaction.commandName === 'مغلق') {
-        // التحقق من الصلاحية
         const allowedRoleIds = ['1486588170282733700', '1524667894711980173'];
         const memberRoles = interaction.member.roles.cache.map(r => r.id);
         const hasPermission = allowedRoleIds.some(roleId => memberRoles.includes(roleId));
