@@ -231,6 +231,7 @@ const HIGH_STAFF_VOICE_CHANNELS = [];
 const CENSORSHIP_TEAM_ROLE_ID = '1499102575918579793';
 const CENSORSHIP_ACTIVITY_CHANNEL_ID = '1529933848144510976';
 const CENSORSHIP_BAN_CHANNEL_ID = '1459305185808617594';
+const CENSORSHIP_HOURS_LOG_CHANNEL_ID = '1513220016718217228';
 
 // ============================================================
 // دوال مساعدة رئيسية (الإجازات، الجرد، إلخ)
@@ -474,8 +475,8 @@ function formatSecondsToHoursText(seconds) {
   return parts.join(' و ');
 }
 
-async function getTotalHoursMap(guild, targetIds) {
-  const channel = client.channels.cache.get(HOURS_LOG_CHANNEL_ID);
+async function getTotalHoursMap(guild, targetIds, channelId = HOURS_LOG_CHANNEL_ID) {
+  const channel = client.channels.cache.get(channelId);
   if (!channel) {
     console.error('❌ روم سجل الساعات غير موجود!');
     return new Map();
@@ -1858,17 +1859,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const doneCounts = await countDoneMessagesPerUser(activityChannel, new Set(members.keys()), cutoffDate);
         console.log(`✅ تم حساب رسائل "done" لـ ${doneCounts.size} عضو.`);
 
-        const banPattern = /باند|بان|طرد|حظر/i;
-        const banChannel = guild.channels.cache.get(CENSORSHIP_BAN_CHANNEL_ID);
-        if (!banChannel) {
-          console.error(`❌ قناة الباند ${CENSORSHIP_BAN_CHANNEL_ID} غير موجودة!`);
-          return interaction.editReply({ content: '❌ قناة الباند غير موجودة.' });
-        }
-
-        console.log('🔄 حساب رسائل الباند التي تطابق النمط...');
-        const banCounts = await countMessagesWithPattern(banChannel, new Set(members.keys()), banPattern);
-        console.log(`✅ تم حساب رسائل الباند لـ ${banCounts.size} عضو.`);
-
         const ratingChannel = guild.channels.cache.get(RATING_CHANNEL_ID);
         if (!ratingChannel) {
           console.error(`❌ قناة التقييمات ${RATING_CHANNEL_ID} غير موجودة!`);
@@ -1879,20 +1869,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const ratingsData = await getAdminRatings(ratingChannel);
         console.log(`✅ تم جلب تقييمات لـ ${ratingsData.size} إداري.`);
 
+        console.log('🔄 جاري جلب إجمالي ساعات كل عضو من روم سجل الساعات (Total Time)...');
+        const totalHoursMap = await getTotalHoursMap(guild, [...members.keys()], CENSORSHIP_HOURS_LOG_CHANNEL_ID);
+        console.log(`✅ تم جلب إجمالي الساعات لـ ${totalHoursMap.size} عضو.`);
+
         const statsById = new Map();
         for (const [id, member] of members) {
           const doneCount = doneCounts.get(id) || 0;
-          const bans = banCounts.get(id) || 0;
           const ratingInfo = ratingsData.get(id);
           const avgRating = ratingInfo ? ratingInfo.average : 0;
           const ratingCount = ratingInfo ? ratingInfo.count : 0;
+          const totalSeconds = totalHoursMap.get(id) || 0;
 
           statsById.set(id, {
             member,
             doneCount,
-            bans,
             avgRating,
-            ratingCount
+            ratingCount,
+            totalSeconds
           });
         }
 
@@ -1932,8 +1926,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
             const stars = stat.avgRating ? ratingStarsBar(Math.round(stat.avgRating)) : '☆☆☆☆☆';
             bodyText += `:black_small_square: **الاسم:** <@${stat.member.id}>\n`;
             bodyText += `:black_small_square: **الدن :** ${stat.doneCount}\n`;
-            bodyText += `:black_small_square: **كم بند شخص :** ${stat.bans}\n`;
-            bodyText += `:black_small_square: **التقييمات :** ${avgRatingStr} / 5 ${stars} (${stat.ratingCount} تقييم)\n\n`;
+            bodyText += `:black_small_square: **التقييمات :** ${avgRatingStr} / 5 ${stars} (${stat.ratingCount} تقييم)\n`;
+            bodyText += `:black_small_square: **الساعات :** ${formatSecondsToHoursText(stat.totalSeconds)}\n\n`;
             totalCount++;
           }
         }
@@ -1947,8 +1941,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
             bodyText += `:black_small_square: **الاسم:** <@${stat.member.id}>\n`;
             bodyText += `:black_small_square: **الرتبة :** بدون رتبة من القائمة\n`;
             bodyText += `:black_small_square: **الدن :** ${stat.doneCount}\n`;
-            bodyText += `:black_small_square: **كم بند شخص :** ${stat.bans}\n`;
-            bodyText += `:black_small_square: **التقييمات :** ${avgRatingStr} / 5 ${stars} (${stat.ratingCount} تقييم)\n\n`;
+            bodyText += `:black_small_square: **التقييمات :** ${avgRatingStr} / 5 ${stars} (${stat.ratingCount} تقييم)\n`;
+            bodyText += `:black_small_square: **الساعات :** ${formatSecondsToHoursText(stat.totalSeconds)}\n\n`;
             totalCount++;
           }
         }
