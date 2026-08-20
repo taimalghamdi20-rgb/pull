@@ -475,7 +475,7 @@ function formatSecondsToHoursText(seconds) {
   return parts.join(' و ');
 }
 
-async function getTotalHoursMap(guild, targetIds, channelId = HOURS_LOG_CHANNEL_ID) {
+async function getTotalHoursMap(guild, targetIds, channelId = HOURS_LOG_CHANNEL_ID, cutoffDate = null) {
   const channel = client.channels.cache.get(channelId);
   if (!channel) {
     console.error('❌ روم سجل الساعات غير موجود!');
@@ -494,7 +494,15 @@ async function getTotalHoursMap(guild, targetIds, channelId = HOURS_LOG_CHANNEL_
     const msgs = await channel.messages.fetch(options);
     if (msgs.size === 0) break;
 
+    let hitCutoff = false;
+
     for (const [, msg] of msgs) {
+      // الرسائل تأتي من الأحدث إلى الأقدم؛ إذا وصلنا لرسالة أقدم من المدة المطلوبة نتوقف تمامًا
+      if (cutoffDate && msg.createdTimestamp < cutoffDate) {
+        hitCutoff = true;
+        break;
+      }
+
       if (!msg.embeds || msg.embeds.length === 0) continue;
       const embed = msg.embeds[0];
       const fields = embed.fields || [];
@@ -512,6 +520,8 @@ async function getTotalHoursMap(guild, targetIds, channelId = HOURS_LOG_CHANNEL_
       totalMap.set(userId, seconds);
       remainingIds.delete(userId);
     }
+
+    if (hitCutoff) break;
 
     lastId = msgs.last().id;
     fetched += msgs.size;
@@ -1869,9 +1879,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const ratingsData = await getAdminRatings(ratingChannel);
         console.log(`✅ تم جلب تقييمات لـ ${ratingsData.size} إداري.`);
 
-        console.log('🔄 جاري جلب إجمالي ساعات كل عضو من روم سجل الساعات (Total Time)...');
-        const totalHoursMap = await getTotalHoursMap(guild, [...members.keys()], CENSORSHIP_HOURS_LOG_CHANNEL_ID);
-        console.log(`✅ تم جلب إجمالي الساعات لـ ${totalHoursMap.size} عضو.`);
+        console.log('🔄 جاري جلب إجمالي ساعات كل عضو من روم سجل الساعات (آخر رسالة Total Time خلال آخر 7 أيام)...');
+        const totalHoursMap = await getTotalHoursMap(guild, [...members.keys()], CENSORSHIP_HOURS_LOG_CHANNEL_ID, cutoffDate);
+        console.log(`✅ تم جلب إجمالي الساعات لـ ${totalHoursMap.size} عضو (والباقي صفر لعدم وجود رسالة خلال آخر 7 أيام).`);
 
         const statsById = new Map();
         for (const [id, member] of members) {
