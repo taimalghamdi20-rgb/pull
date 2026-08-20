@@ -765,18 +765,22 @@ function isDeafened(voiceState) {
   return voiceState.selfDeaf || voiceState.serverDeaf;
 }
 
+// ========== الدالة المعدلة getNextEligibleWaitingMember ==========
 function getNextEligibleWaitingMember(guild) {
   for (const waitingId of WAITING_CHANNEL_IDS) {
     const waitingChannel = guild.channels.cache.get(waitingId);
     if (!waitingChannel || !waitingChannel.members) continue;
     for (const [, member] of waitingChannel.members) {
-      if (!hasStaffRole(member)) {
+      // استثناء الموظفين والإداريين فقط، ولا نستثني أعضاء الرقابة
+      const isStaff = hasStaffRole(member) || member.roles.cache.has(ADMIN_ROLE_ID);
+      if (!isStaff) {
         return { member, waitingChannelId: waitingId };
       }
     }
   }
   return null;
 }
+// ========== نهاية الدالة المعدلة ==========
 
 function isFreeAdminRoom(channel, targetAdminRoomIds, requiredRoleId = null) {
   if (!channel || channel.type !== 2) return false;
@@ -815,7 +819,7 @@ async function sendCitizenNotification(citizenUser, adminUser) {
   }
 }
 
-// ========== الدالة المعدلة tryPullForAllFreeAdmins ==========
+// ========== الدالة tryPullForAllFreeAdmins (معدّلة: الرومات الثلاثة كلها صريحة عبر WAITING_ROOM_ADMIN_MAP) ==========
 async function tryPullForAllFreeAdmins(guild) {
   const waitingData = getNextEligibleWaitingMember(guild);
   if (!waitingData) return;
@@ -828,7 +832,6 @@ async function tryPullForAllFreeAdmins(guild) {
 
   // ---- الحالة الخاصة لروم 1519511668823167116 ----
   if (waitingChannelId === '1519511668823167116') {
-    // أي عضو يدخل يُسحب (لا نتحقق من رتبة العضو)
     targetAdminRoomIds = [
       '1538435076969209896',
       '1538435049958154240',
@@ -845,14 +848,19 @@ async function tryPullForAllFreeAdmins(guild) {
   }
   // ---- الحالة الخاصة لروم 1483285123008041031 ----
   else if (waitingChannelId === '1483285123008041031') {
-    // نستخدم القائمة الموجودة في WAITING_ROOM_ADMIN_MAP
+    targetAdminRoomIds = WAITING_ROOM_ADMIN_MAP[waitingChannelId] || ADMIN_ROOM_IDS;
+    requiredRoleId = WAITING_ROOM_REQUIRED_ROLE[waitingChannelId] || ADMIN_ROLE_ID;
+    cooldownSeconds = 30;
+  }
+  // ---- الحالة الخاصة لروم 1481398869463138604 (تمت إضافتها حتى ينسحب أي شخص لرومات الدعم المحددة له مباشرة) ----
+  else if (waitingChannelId === '1481398869463138604') {
     targetAdminRoomIds = WAITING_ROOM_ADMIN_MAP[waitingChannelId] || ADMIN_ROOM_IDS;
     requiredRoleId = WAITING_ROOM_REQUIRED_ROLE[waitingChannelId] || ADMIN_ROLE_ID;
     cooldownSeconds = 30;
   }
   // ---- الحالات الأخرى (المنطق الأصلي) ----
   else {
-    const SPECIAL_PULL_WAITING_ROOMS = ['1519511668823167116', '1481398869463138604'];
+    const SPECIAL_PULL_WAITING_ROOMS = [];
     const SPECIAL_PULL_REQUIRED_ROLE = '1476796533168017428';
     const SPECIAL_PULL_TARGET_ROOMS = [
       '1538016869968248993',
@@ -887,7 +895,6 @@ async function tryPullForAllFreeAdmins(guild) {
     }
   }
 
-  // البحث عن الإداريين المتفرغين في الرومات المستهدفة
   const freeAdmins = [];
   for (const roomId of targetAdminRoomIds) {
     const channel = guild.channels.cache.get(roomId);
@@ -900,7 +907,6 @@ async function tryPullForAllFreeAdmins(guild) {
   if (freeAdmins.length === 0) return;
   if (activeSessions.has(candidate.id)) return;
 
-  // تصفية الإداريين حسب الكول داون (العام والزوجي)
   const eligibleAdmins = freeAdmins.filter(({ adminMember }) => {
     const adminCooldownEnd = cooldownMap.get(adminMember.id);
     if (adminCooldownEnd && adminCooldownEnd > Date.now()) return false;
@@ -926,7 +932,6 @@ async function tryPullForAllFreeAdmins(guild) {
       adminId: adminMember.id,
       startTime: Date.now()
     });
-    // استخدام مدة الكول داون المحددة (30 ثانية للحالتين الخاصتين، 15 ثانية للباقي)
     cooldownMap.set(adminMember.id, Date.now() + cooldownSeconds * 1000);
     await sendCitizenNotification(candidate.user, adminMember.user);
     console.log(`✅ تم سحب ${candidate.user.tag} إلى ${adminMember.user.tag}`);
@@ -934,7 +939,7 @@ async function tryPullForAllFreeAdmins(guild) {
     console.error(`⚠️ فشل سحب ${candidate.user.tag}:`, err.message);
   }
 }
-// ========== نهاية الدالة المعدلة ==========
+// ========== نهاية الدالة ==========
 
 // ============================================================
 // دالة إنهاء الجلسة مع إرسال تقييم
