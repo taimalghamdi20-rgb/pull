@@ -32,6 +32,17 @@ const {
   PermissionFlagsBits,
 } = require('discord.js');
 
+// ===== تعريف العميل مبكراً =====
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
+});
+
 // ===== قاعدة بيانات =====
 const Database = require('better-sqlite3');
 const db = new Database('data.db');
@@ -721,6 +732,10 @@ client.on(Events.MessageCreate, async (message) => {
 // دوال السحب التلقائي (مع Queue محسّنة)
 // ============================================================
 const waitingQueue = []; // { userId, channelId, joinedAt }
+const cooldownMap = new Map();
+const activeSessions = new Map();
+const waitingTimers = new Map();
+const customWaitingTimers = new Map();
 
 function isDeafened(voiceState) {
   if (!voiceState) return false;
@@ -960,6 +975,17 @@ async function endSession(guild, citizenId, adminId, startTime) {
   } catch (err) {
     console.error('⚠️ تعذر إرسال رسالة التقييم للمواطن:', err);
   }
+}
+
+// ===== دوال قاعدة البيانات للتقييم =====
+function isSessionEvaluated(sessionId) {
+  const stmt = db.prepare('SELECT session_id FROM evaluated_sessions WHERE session_id = ?');
+  return stmt.get(sessionId) !== undefined;
+}
+
+function markSessionEvaluated(sessionId) {
+  const stmt = db.prepare('INSERT OR IGNORE INTO evaluated_sessions (session_id) VALUES (?)');
+  stmt.run(sessionId);
 }
 
 // ============================================================
