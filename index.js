@@ -32,17 +32,6 @@ const {
   PermissionFlagsBits,
 } = require('discord.js');
 
-// ===== تعريف العميل مبكراً =====
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildVoiceStates,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-  ],
-});
-
 // ===== قاعدة بيانات =====
 const Database = require('better-sqlite3');
 const db = new Database('data.db');
@@ -255,7 +244,7 @@ function hasBarrenRole(member) {
   return member.roles.cache.has(BARREN_ROLE_ID);
 }
 
-// ===== دوال قاعدة البيانات المحسّنة للإجازات =====
+// ===== دوال قاعدة البيانات =====
 function loadActiveLeaves() {
   const stmt = db.prepare('SELECT user_id, end_date FROM active_leaves');
   const rows = stmt.all();
@@ -264,54 +253,52 @@ function loadActiveLeaves() {
   return map;
 }
 
-// إضافة أو تحديث إجازة
-function addLeave(userId, endDate) {
-  const stmt = db.prepare(`
-    INSERT INTO active_leaves (user_id, end_date)
-    VALUES (?, ?)
-    ON CONFLICT(user_id) DO UPDATE SET end_date = excluded.end_date
-  `);
-  stmt.run(userId, endDate);
-  activeLeaves.set(userId, { endDate });
+function saveActiveLeaves() {
+  db.prepare('DELETE FROM active_leaves').run();
+  const insert = db.prepare('INSERT INTO active_leaves (user_id, end_date) VALUES (?, ?)');
+  const trans = db.transaction((entries) => {
+    for (const [userId, data] of entries) insert.run(userId, data.endDate);
+  });
+  trans(activeLeaves.entries());
 }
 
-// حذف إجازة معينة
-function removeLeave(userId) {
-  const stmt = db.prepare('DELETE FROM active_leaves WHERE user_id = ?');
-  stmt.run(userId);
-  activeLeaves.delete(userId);
+function isSessionEvaluated(sessionId) {
+  const stmt = db.prepare('SELECT session_id FROM evaluated_sessions WHERE session_id = ?');
+  return stmt.get(sessionId) !== undefined;
 }
 
-// استرجاع خريطة الإجازات (للقراءة فقط)
+function markSessionEvaluated(sessionId) {
+  const stmt = db.prepare('INSERT OR IGNORE INTO evaluated_sessions (session_id) VALUES (?)');
+  stmt.run(sessionId);
+}
+
 const activeLeaves = loadActiveLeaves();
 
-// تنظيف الإجازات المنتهية تلقائياً (كل دقيقة)
-async function cleanupExpiredLeaves(guild) {
-  const now = Date.now();
-  let changed = false;
-  for (const [userId, data] of activeLeaves) {
-    if (now >= data.endDate) {
-      // إزالة رتبة الإجازة من العضو
-      try {
-        const member = await guild.members.fetch(userId).catch(() => null);
-        if (member && member.roles.cache.has(LEAVE_ROLE_ID)) {
-          await member.roles.remove(LEAVE_ROLE_ID);
-          console.log(`✅ تمت إزالة رتبة الإجازة من ${member.user.tag}`);
-        }
-      } catch (err) {
-        console.error(`❌ فشل إزالة رتبة الإجازة من ${userId}:`, err);
-      }
-      // حذف من قاعدة البيانات والـ Map
-      removeLeave(userId);
-      changed = true;
-    }
-  }
-  if (changed) {
-    console.log('🧹 تم تنظيف الإجازات المنتهية.');
-  }
-}
+const MAX_LEAVE_DAYS = 14;
+const LEAVE_PANEL_COLOR = 0xC2410C;
+const LEAVE_BANNER_PATH = path.join(__dirname, 'leave_banner.png');
+const LEAVE_BANNER_FILENAME = 'leave_banner.png';
+const SERVER_LOGO_PATH = path.join(__dirname, 'server_logo.png');
+const SERVER_LOGO_FILENAME = 'server_logo.png';
 
-// ===== دوال التقييم =====
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
+});
+
+const activeSessions = new Map();
+const cooldownMap = new Map();
+const waitingTimers = new Map();
+const customWaitingTimers = new Map();
+
+// ============================================================
+// دوال التقييم
+// ============================================================
 function ratingStarsBar(rating) {
   const filled = '⭐'.repeat(rating);
   const empty = '☆'.repeat(5 - rating);
@@ -329,7 +316,9 @@ function ratingLabel(rating) {
   return labels[rating] || '';
 }
 
-// ===== دوال جلب الإحصائيات =====
+// ============================================================
+// دوال جلب الإحصائيات (لأمر barren)
+// ============================================================
 async function fetchMessagesFromDate(channelId, fromDate) {
   try {
     const channel = client.channels.cache.get(channelId);
@@ -356,80 +345,28 @@ async function fetchMessagesFromDate(channelId, fromDate) {
   }
 }
 
-// دالة مساعدة لإرسال ردود طويلة (تقسيم تلقائي)
-async function sendLongReply(interaction, content, files = []) {
-  const MAX_MSG_LENGTH = 2000;
-  if (content.length <= MAX_MSG_LENGTH) {
-    if (interaction.replied || interaction.deferred) {
-      await interaction.editReply({ content, files });
-    } else {
-      await interaction.reply({ content, files });
-    }
-    return;
+async function getLastPromotionDate(guild) {
+  const promotionChannel = client.channels.cache.get(PROMOTION_CHANNEL_ID);
+  if (!promotionChannel) {
+    console.error('❌ قناة الترقيات غير موجودة!');
+    return new Map();
   }
 
-  // تقسيم النص إلى أجزاء
-  const parts = [];
-  let currentPart = '';
-  const lines = content.split('\n');
-  for (const line of lines) {
-    const testPart = currentPart + line + '\n';
-    if (testPart.length > MAX_MSG_LENGTH && currentPart.length > 0) {
-      parts.push(currentPart);
-      currentPart = '';
-    }
-    currentPart += (currentPart ? '\n' : '') + line;
-  }
-  if (currentPart) parts.push(currentPart);
-
-  // إرسال الأجزاء
-  for (let i = 0; i < parts.length; i++) {
-    const isFirst = i === 0;
-    const msg = parts[i];
-    if (isFirst) {
-      if (interaction.replied || interaction.deferred) {
-        await interaction.editReply({ content: msg, files: files });
-      } else {
-        await interaction.reply({ content: msg, files: files });
-      }
-    } else {
-      await interaction.followUp({ content: msg });
-    }
-  }
-}
-
-// دوال الإحصائيات (معدلة لتقبل cutoffDate)
-async function getAdminRatings(channel, cutoffDate = null) {
-  const ratings = new Map();
+  const lastPromotionMap = new Map();
   let lastId = null;
   let fetched = 0;
-  const limit = 5000;
+  const limit = 1000;
   while (fetched < limit) {
     const options = { limit: 100 };
     if (lastId) options.before = lastId;
-    const msgs = await channel.messages.fetch(options);
+    const msgs = await promotionChannel.messages.fetch(options);
     if (msgs.size === 0) break;
     for (const [, msg] of msgs) {
-      if (cutoffDate && msg.createdTimestamp < cutoffDate) continue;
-      if (msg.embeds && msg.embeds.length > 0) {
-        const embed = msg.embeds[0];
-        if (embed.fields) {
-          const adminField = embed.fields.find(f => f.name && f.name.includes('الإداري'));
-          const ratingField = embed.fields.find(f => f.name && f.name.includes('التقييم'));
-          if (adminField && ratingField) {
-            const match = adminField.value.match(/<@!?(\d+)>/);
-            if (match) {
-              const adminId = match[1];
-              const ratingMatch = ratingField.value.match(/(\d+)\/5/);
-              if (ratingMatch) {
-                const rating = parseInt(ratingMatch[1]);
-                if (!ratings.has(adminId)) ratings.set(adminId, { sum: 0, count: 0 });
-                const data = ratings.get(adminId);
-                data.sum += rating;
-                data.count++;
-              }
-            }
-          }
+      const match = msg.content.match(/<@!?(\d+)>/);
+      if (match) {
+        const userId = match[1];
+        if (!lastPromotionMap.has(userId)) {
+          lastPromotionMap.set(userId, msg.createdTimestamp);
         }
       }
     }
@@ -437,72 +374,8 @@ async function getAdminRatings(channel, cutoffDate = null) {
     fetched += msgs.size;
     if (msgs.size < 100) break;
   }
-  const result = new Map();
-  for (const [adminId, data] of ratings) {
-    result.set(adminId, {
-      sum: data.sum,
-      count: data.count,
-      average: data.count > 0 ? data.sum / data.count : 0,
-    });
-  }
-  return result;
-}
 
-async function countMessagesWithPattern(channel, userIds, pattern, cutoffDate = null) {
-  const counts = new Map();
-  for (const id of userIds) counts.set(id, 0);
-  let lastId = null;
-  let fetched = 0;
-  const limit = 5000;
-  while (fetched < limit) {
-    const options = { limit: 100 };
-    if (lastId) options.before = lastId;
-    const msgs = await channel.messages.fetch(options);
-    if (msgs.size === 0) break;
-    for (const [, msg] of msgs) {
-      if (cutoffDate && msg.createdTimestamp < cutoffDate) continue;
-      if (pattern.test(msg.content) && counts.has(msg.author.id)) {
-        counts.set(msg.author.id, counts.get(msg.author.id) + 1);
-      }
-    }
-    lastId = msgs.last().id;
-    fetched += msgs.size;
-    if (msgs.size < 100) break;
-  }
-  return counts;
-}
-
-async function countDoneMessagesPerUser(channel, userIds, cutoffDate) {
-  const counts = new Map();
-  for (const id of userIds) counts.set(id, 0);
-  const patterns = [
-    /\bdone\b/i,
-    /عدد المساعدات/i,
-    /تم حل المشكلة/i,
-    /\bnعم\b/i,
-    /\d+\s*done/i,
-    /DONE/i,
-  ];
-  let lastId = null;
-  let fetched = 0;
-  const limit = 5000;
-  while (fetched < limit) {
-    const options = { limit: 100 };
-    if (lastId) options.before = lastId;
-    const msgs = await channel.messages.fetch(options);
-    if (msgs.size === 0) break;
-    for (const [, msg] of msgs) {
-      if (msg.createdTimestamp < cutoffDate) continue;
-      const isDone = patterns.some(pattern => pattern.test(msg.content));
-      if (isDone && counts.has(msg.author.id)) {
-        counts.set(msg.author.id, counts.get(msg.author.id) + 1);
-      }
-    }
-    lastId = msgs.last().id;
-    fetched += msgs.size;
-    if (msgs.size < 100) break;
-  }
-  return counts;
+  return lastPromotionMap;
 }
 
 async function getSupportRoleChannelDates(guild) {
@@ -511,6 +384,7 @@ async function getSupportRoleChannelDates(guild) {
     console.error('❌ روم سجل رتبة الدعم غير موجود!');
     return new Map();
   }
+
   const dateMap = new Map();
   let lastId = null;
   let fetched = 0;
@@ -533,6 +407,7 @@ async function getSupportRoleChannelDates(guild) {
     fetched += msgs.size;
     if (msgs.size < 100) break;
   }
+
   return dateMap;
 }
 
@@ -546,6 +421,7 @@ async function getRoleAddDateFromAuditLog(guild, userId, roleId) {
         before,
       });
       if (!logs.entries.size) break;
+
       for (const [, entry] of logs.entries) {
         if (!entry.target || entry.target.id !== userId) continue;
         const addChange = entry.changes && entry.changes.find(
@@ -555,6 +431,7 @@ async function getRoleAddDateFromAuditLog(guild, userId, roleId) {
           return entry.createdTimestamp;
         }
       }
+
       const lastEntry = logs.entries.last();
       if (!lastEntry) break;
       before = lastEntry.id;
@@ -603,16 +480,19 @@ async function getTotalHoursMap(guild, targetIds) {
     console.error('❌ روم سجل الساعات غير موجود!');
     return new Map();
   }
+
   const totalMap = new Map();
   const remainingIds = new Set(targetIds);
   let lastId = null;
   let fetched = 0;
   const limit = 3000;
+
   while (fetched < limit && remainingIds.size > 0) {
     const options = { limit: 100 };
     if (lastId) options.before = lastId;
     const msgs = await channel.messages.fetch(options);
     if (msgs.size === 0) break;
+
     for (const [, msg] of msgs) {
       if (!msg.embeds || msg.embeds.length === 0) continue;
       const embed = msg.embeds[0];
@@ -620,19 +500,158 @@ async function getTotalHoursMap(guild, targetIds) {
       const adminField = fields.find(f => f.name && f.name.includes('Admin'));
       const totalField = fields.find(f => f.name && f.name.includes('Total Time'));
       if (!adminField || !totalField) continue;
+
       const match = adminField.value.match(/<@!?(\d+)>/);
       if (!match) continue;
       const userId = match[1];
+
       if (totalMap.has(userId)) continue;
+
       const seconds = parseDurationToSeconds(totalField.value);
       totalMap.set(userId, seconds);
       remainingIds.delete(userId);
     }
+
     lastId = msgs.last().id;
     fetched += msgs.size;
     if (msgs.size < 100) break;
   }
+
   return totalMap;
+}
+
+// ============================================================
+// دوال مساعدة لجرد فريق الرقابة
+// ============================================================
+
+/**
+ * تحسب عدد رسائل "done" بأنماط متعددة لكل عضو في قناة معينة خلال آخر 7 أيام.
+ */
+async function countDoneMessagesPerUser(channel, userIds, cutoffDate) {
+  const counts = new Map();
+  for (const id of userIds) counts.set(id, 0);
+
+  const patterns = [
+    /\bdone\b/i,
+    /عدد المساعدات/i,
+    /تم حل المشكلة/i,
+    /\bnعم\b/i,
+    /\d+\s*done/i,
+    /DONE/i,
+  ];
+
+  let lastId = null;
+  let fetched = 0;
+  const limit = 5000;
+
+  while (fetched < limit) {
+    const options = { limit: 100 };
+    if (lastId) options.before = lastId;
+    const msgs = await channel.messages.fetch(options);
+    if (msgs.size === 0) break;
+
+    for (const [, msg] of msgs) {
+      if (msg.createdTimestamp < cutoffDate) continue;
+      const isDone = patterns.some(pattern => pattern.test(msg.content));
+      if (isDone && counts.has(msg.author.id)) {
+        counts.set(msg.author.id, counts.get(msg.author.id) + 1);
+      }
+    }
+
+    lastId = msgs.last().id;
+    fetched += msgs.size;
+    if (msgs.size < 100) break;
+  }
+
+  return counts;
+}
+
+/**
+ * تحسب عدد رسائل الباند التي تطابق نمطاً معيناً.
+ */
+async function countMessagesWithPattern(channel, userIds, pattern, cutoffDate = null) {
+  const counts = new Map();
+  for (const id of userIds) counts.set(id, 0);
+
+  let lastId = null;
+  let fetched = 0;
+  const limit = 5000;
+
+  while (fetched < limit) {
+    const options = { limit: 100 };
+    if (lastId) options.before = lastId;
+    const msgs = await channel.messages.fetch(options);
+    if (msgs.size === 0) break;
+
+    for (const [, msg] of msgs) {
+      if (cutoffDate && msg.createdTimestamp < cutoffDate) continue;
+      if (pattern.test(msg.content) && counts.has(msg.author.id)) {
+        counts.set(msg.author.id, counts.get(msg.author.id) + 1);
+      }
+    }
+
+    lastId = msgs.last().id;
+    fetched += msgs.size;
+    if (msgs.size < 100) break;
+  }
+
+  return counts;
+}
+
+/**
+ * تجلب جميع التقييمات من قناة التقييمات وتحسب المتوسط لكل إداري.
+ */
+async function getAdminRatings(channel) {
+  const ratings = new Map();
+
+  let lastId = null;
+  let fetched = 0;
+  const limit = 5000;
+
+  while (fetched < limit) {
+    const options = { limit: 100 };
+    if (lastId) options.before = lastId;
+    const msgs = await channel.messages.fetch(options);
+    if (msgs.size === 0) break;
+
+    for (const [, msg] of msgs) {
+      if (msg.embeds && msg.embeds.length > 0) {
+        const embed = msg.embeds[0];
+        if (embed.fields) {
+          const adminField = embed.fields.find(f => f.name && f.name.includes('الإداري'));
+          const ratingField = embed.fields.find(f => f.name && f.name.includes('التقييم'));
+          if (adminField && ratingField) {
+            const match = adminField.value.match(/<@!?(\d+)>/);
+            if (match) {
+              const adminId = match[1];
+              const ratingMatch = ratingField.value.match(/(\d+)\/5/);
+              if (ratingMatch) {
+                const rating = parseInt(ratingMatch[1]);
+                if (!ratings.has(adminId)) ratings.set(adminId, { sum: 0, count: 0 });
+                const data = ratings.get(adminId);
+                data.sum += rating;
+                data.count++;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    lastId = msgs.last().id;
+    fetched += msgs.size;
+    if (msgs.size < 100) break;
+  }
+
+  const result = new Map();
+  for (const [adminId, data] of ratings) {
+    result.set(adminId, {
+      sum: data.sum,
+      count: data.count,
+      average: data.count > 0 ? data.sum / data.count : 0,
+    });
+  }
+  return result;
 }
 
 // ============================================================
@@ -645,8 +664,10 @@ async function sendVoiceChannelReport(guild, channelIds, reportChannelId, report
       console.error(`❌ قناة التقرير ${reportChannelId} غير موجودة!`);
       return;
     }
+
     const membersInChannels = new Map();
     let totalMembers = 0;
+
     for (const channelId of channelIds) {
       const channel = guild.channels.cache.get(channelId);
       if (!channel || channel.type !== 2) continue;
@@ -656,6 +677,7 @@ async function sendVoiceChannelReport(guild, channelIds, reportChannelId, report
         totalMembers += members.size;
       }
     }
+
     if (totalMembers === 0) {
       const embed = new EmbedBuilder()
         .setTitle(`📊 ${reportTitle}`)
@@ -665,6 +687,7 @@ async function sendVoiceChannelReport(guild, channelIds, reportChannelId, report
       await reportChannel.send({ embeds: [embed] });
       return;
     }
+
     let description = '';
     for (const [channelId, members] of membersInChannels) {
       const channel = guild.channels.cache.get(channelId);
@@ -675,12 +698,14 @@ async function sendVoiceChannelReport(guild, channelIds, reportChannelId, report
       }
       description += '\n';
     }
+
     const embed = new EmbedBuilder()
       .setTitle(`📊 ${reportTitle}`)
       .setDescription(description)
       .setColor(reportColor)
       .setFooter({ text: `إجمالي الأعضاء: ${totalMembers}` })
       .setTimestamp();
+
     await reportChannel.send({ embeds: [embed] });
     console.log(`✅ تم إرسال تقرير ${reportTitle} إلى ${reportChannelId}`);
   } catch (err) {
@@ -694,10 +719,13 @@ async function sendVoiceChannelReport(guild, channelIds, reportChannelId, report
 async function autoHmCheckout(guild, userId) {
   const nowTimestamp = Math.floor(Date.now() / 1000);
   hmCheckedIn.delete(userId);
+
   try {
     const logChannel = guild.channels.cache.get(HM_LOG_CHANNEL_ID);
     if (!logChannel) return;
+
     const user = await client.users.fetch(userId).catch(() => null);
+
     const logEmbed = new EmbedBuilder()
       .setColor(HM_OUT_COLOR)
       .setTitle('Admin Logout')
@@ -708,6 +736,7 @@ async function autoHmCheckout(guild, userId) {
       )
       .setThumbnail(user ? user.displayAvatarURL() : undefined)
       .setTimestamp();
+
     await logChannel.send({ embeds: [logEmbed] });
     console.log(`🔴 تم تسجيل خروج تلقائي لـ ${userId}`);
   } catch (err) {
@@ -729,17 +758,24 @@ client.on(Events.MessageCreate, async (message) => {
 });
 
 // ============================================================
-// دوال السحب التلقائي (مع Queue محسّنة)
+// دوال السحب التلقائي
 // ============================================================
-const waitingQueue = []; // { userId, channelId, joinedAt }
-const cooldownMap = new Map();
-const activeSessions = new Map();
-const waitingTimers = new Map();
-const customWaitingTimers = new Map();
-
 function isDeafened(voiceState) {
   if (!voiceState) return false;
   return voiceState.selfDeaf || voiceState.serverDeaf;
+}
+
+function getNextEligibleWaitingMember(guild) {
+  for (const waitingId of WAITING_CHANNEL_IDS) {
+    const waitingChannel = guild.channels.cache.get(waitingId);
+    if (!waitingChannel || !waitingChannel.members) continue;
+    for (const [, member] of waitingChannel.members) {
+      if (!hasStaffRole(member)) {
+        return { member, waitingChannelId: waitingId };
+      }
+    }
+  }
+  return null;
 }
 
 function isFreeAdminRoom(channel, targetAdminRoomIds, requiredRoleId = null) {
@@ -762,12 +798,14 @@ async function sendCitizenNotification(citizenUser, adminUser) {
       .setThumbnail(`attachment://${SERVER_LOGO_FILENAME}`)
       .setFooter({ text: 'جهز ملاحظاتك وأسئلتك' })
       .setTimestamp();
+
     let logoFile = null;
     try {
       if (fs.existsSync(SERVER_LOGO_PATH)) {
         logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
       }
     } catch (e) {}
+
     await citizenUser.send({
       embeds: [embed],
       files: logoFile ? [logoFile] : []
@@ -777,159 +815,92 @@ async function sendCitizenNotification(citizenUser, adminUser) {
   }
 }
 
-// متغير لمنع race condition
-let pulling = false;
-
 async function tryPullForAllFreeAdmins(guild) {
-  if (pulling) return;
-  pulling = true;
+  const waitingData = getNextEligibleWaitingMember(guild);
+  if (!waitingData) return;
+
+  const { member: candidate, waitingChannelId } = waitingData;
+
+  let targetAdminRoomIds;
+  let requiredRoleId;
+
+  const SPECIAL_PULL_WAITING_ROOMS = ['1519511668823167116', '1481398869463138604'];
+  const SPECIAL_PULL_REQUIRED_ROLE = '1476796533168017428';
+  const SPECIAL_PULL_TARGET_ROOMS = [
+    '1538016869968248993',
+    '1538019823102070865',
+    '1538019839183032330',
+    '1538019855465455666',
+    '1538019875556032572'
+  ];
+
+  if (SPECIAL_PULL_WAITING_ROOMS.includes(waitingChannelId)) {
+    if (!candidate.roles.cache.has(SPECIAL_PULL_REQUIRED_ROLE)) {
+      console.log(`⏳ العضو ${candidate.user.tag} لا يملك الرتبة المطلوبة للدخول إلى روم الدعم المخصص.`);
+      return;
+    }
+    targetAdminRoomIds = SPECIAL_PULL_TARGET_ROOMS;
+    requiredRoleId = SPECIAL_PULL_REQUIRED_ROLE;
+  } else {
+    const isSpecialCase =
+      waitingChannelId === SPECIAL_WAITING_ROOM_ID &&
+      candidate.roles.cache.has(SPECIAL_ROLE_ID);
+
+    if (isSpecialCase) {
+      targetAdminRoomIds = SPECIAL_ADMIN_ROOM_IDS;
+      requiredRoleId = SPECIAL_REQUIRED_ADMIN_ROLE_ID;
+    } else if (WAITING_ROOM_ADMIN_MAP[waitingChannelId]) {
+      targetAdminRoomIds = WAITING_ROOM_ADMIN_MAP[waitingChannelId];
+      requiredRoleId = WAITING_ROOM_REQUIRED_ROLE[waitingChannelId] || ADMIN_ROLE_ID;
+    } else {
+      targetAdminRoomIds = ADMIN_ROOM_IDS;
+      requiredRoleId = ADMIN_ROLE_ID;
+    }
+  }
+
+  const freeAdmins = [];
+  for (const roomId of targetAdminRoomIds) {
+    const channel = guild.channels.cache.get(roomId);
+    if (!channel) continue;
+    if (!isFreeAdminRoom(channel, targetAdminRoomIds, requiredRoleId)) continue;
+    const adminMember = channel.members.first();
+    freeAdmins.push({ channel, adminMember });
+  }
+
+  if (freeAdmins.length === 0) return;
+  if (activeSessions.has(candidate.id)) return;
+
+  const eligibleAdmins = freeAdmins.filter(({ adminMember }) => {
+    const adminCooldownKey = adminMember.id;
+    const adminCooldownEnd = cooldownMap.get(adminCooldownKey);
+    if (adminCooldownEnd && adminCooldownEnd > Date.now()) return false;
+
+    const pairKey = `${adminMember.id}_${candidate.id}`;
+    const pairCooldownEnd = cooldownMap.get(pairKey);
+    if (pairCooldownEnd && pairCooldownEnd > Date.now()) return false;
+    return true;
+  });
+
+  if (eligibleAdmins.length === 0) {
+    console.log(`⏳ جميع الإداريين المتفرغين في الكول داون مع ${candidate.user.tag}`);
+    return;
+  }
+
+  const { adminMember } = eligibleAdmins[0];
+  const adminChannel = adminMember.voice.channel;
+  if (!adminChannel) return;
+
   try {
-    // 1. تنقية الـ Queue: إزالة الأعضاء غير الصالحين
-    for (let i = waitingQueue.length - 1; i >= 0; i--) {
-      const entry = waitingQueue[i];
-      try {
-        const member = await guild.members.fetch(entry.userId).catch(() => null);
-        if (!member) {
-          waitingQueue.splice(i, 1);
-          continue;
-        }
-        const voiceChannel = member.voice.channel;
-        if (!voiceChannel || !WAITING_CHANNEL_IDS.includes(voiceChannel.id) || hasStaffRole(member)) {
-          waitingQueue.splice(i, 1);
-          continue;
-        }
-        // تحديث channelId إذا تغير
-        if (entry.channelId !== voiceChannel.id) {
-          entry.channelId = voiceChannel.id;
-          entry.joinedAt = Date.now();
-        }
-      } catch (err) {
-        waitingQueue.splice(i, 1);
-      }
-    }
-
-    if (waitingQueue.length === 0) return;
-
-    // 2. البحث عن أول عضو مؤهل للسحب
-    for (let i = 0; i < waitingQueue.length; i++) {
-      const entry = waitingQueue[i];
-      const candidate = await guild.members.fetch(entry.userId).catch(() => null);
-      if (!candidate) {
-        waitingQueue.splice(i, 1);
-        i--;
-        continue;
-      }
-
-      // تحقق من وجوده في روم انتظار وليس لديه رتبة Staff
-      const voiceChannel = candidate.voice.channel;
-      if (!voiceChannel || !WAITING_CHANNEL_IDS.includes(voiceChannel.id) || hasStaffRole(candidate)) {
-        waitingQueue.splice(i, 1);
-        i--;
-        continue;
-      }
-      if (activeSessions.has(candidate.id)) {
-        // إذا كان في جلسة بالفعل، نزيله من Queue (لأنه لن يحتاج سحب)
-        waitingQueue.splice(i, 1);
-        i--;
-        continue;
-      }
-
-      const waitingChannelId = voiceChannel.id;
-
-      // تحديد رومات الإداريين المطلوبة حسب روم الانتظار
-      let targetAdminRoomIds;
-      let requiredRoleId;
-
-      const SPECIAL_PULL_WAITING_ROOMS = ['1519511668823167116', '1481398869463138604'];
-      const SPECIAL_PULL_REQUIRED_ROLE = '1476796533168017428';
-      const SPECIAL_PULL_TARGET_ROOMS = [
-        '1538016869968248993',
-        '1538019823102070865',
-        '1538019839183032330',
-        '1538019855465455666',
-        '1538019875556032572'
-      ];
-
-      if (SPECIAL_PULL_WAITING_ROOMS.includes(waitingChannelId)) {
-        if (!candidate.roles.cache.has(SPECIAL_PULL_REQUIRED_ROLE)) {
-          // هذا العضو غير مؤهل لهذا الروم، نزيله من Queue
-          waitingQueue.splice(i, 1);
-          i--;
-          continue;
-        }
-        targetAdminRoomIds = SPECIAL_PULL_TARGET_ROOMS;
-        requiredRoleId = SPECIAL_PULL_REQUIRED_ROLE;
-      } else {
-        const isSpecialCase =
-          waitingChannelId === SPECIAL_WAITING_ROOM_ID &&
-          candidate.roles.cache.has(SPECIAL_ROLE_ID);
-        if (isSpecialCase) {
-          targetAdminRoomIds = SPECIAL_ADMIN_ROOM_IDS;
-          requiredRoleId = SPECIAL_REQUIRED_ADMIN_ROLE_ID;
-        } else if (WAITING_ROOM_ADMIN_MAP[waitingChannelId]) {
-          targetAdminRoomIds = WAITING_ROOM_ADMIN_MAP[waitingChannelId];
-          requiredRoleId = WAITING_ROOM_REQUIRED_ROLE[waitingChannelId] || ADMIN_ROLE_ID;
-        } else {
-          targetAdminRoomIds = ADMIN_ROOM_IDS;
-          requiredRoleId = ADMIN_ROLE_ID;
-        }
-      }
-
-      // البحث عن إداري متفرغ مناسب
-      const freeAdmins = [];
-      for (const roomId of targetAdminRoomIds) {
-        const channel = guild.channels.cache.get(roomId);
-        if (!channel) continue;
-        if (!isFreeAdminRoom(channel, targetAdminRoomIds, requiredRoleId)) continue;
-        const adminMember = channel.members.first();
-        freeAdmins.push({ channel, adminMember });
-      }
-
-      if (freeAdmins.length === 0) {
-        // لا يوجد إداري متفرغ حاليًا، نترك هذا العضو في Queue وننتقل للتالي
-        continue;
-      }
-
-      // تصفية الإداريين حسب الـ cooldown
-      const eligibleAdmins = freeAdmins.filter(({ adminMember }) => {
-        const adminCooldownKey = adminMember.id;
-        const adminCooldownEnd = cooldownMap.get(adminCooldownKey);
-        if (adminCooldownEnd && adminCooldownEnd > Date.now()) return false;
-        const pairKey = `${adminMember.id}_${candidate.id}`;
-        const pairCooldownEnd = cooldownMap.get(pairKey);
-        if (pairCooldownEnd && pairCooldownEnd > Date.now()) return false;
-        return true;
-      });
-
-      if (eligibleAdmins.length === 0) {
-        // جميع الإداريين في كول داون مع هذا العضو، ننتقل للتالي
-        continue;
-      }
-
-      // سحب العضو مع أول إداري مناسب
-      const { adminMember } = eligibleAdmins[0];
-      const adminChannel = adminMember.voice.channel;
-      if (!adminChannel) continue;
-
-      try {
-        await candidate.voice.setChannel(adminChannel.id, 'سحب تلقائي - جلسة دعم');
-        activeSessions.set(candidate.id, {
-          adminId: adminMember.id,
-          startTime: Date.now()
-        });
-        cooldownMap.set(adminMember.id, Date.now() + 15 * 1000);
-        await sendCitizenNotification(candidate.user, adminMember.user);
-        console.log(`✅ تم سحب ${candidate.user.tag} إلى ${adminMember.user.tag}`);
-        // إزالة من قائمة الانتظار بعد السحب
-        waitingQueue.splice(i, 1);
-        return; // نخرج بعد نجاح السحب
-      } catch (err) {
-        console.error(`⚠️ فشل سحب ${candidate.user.tag}:`, err.message);
-        // في حالة الفشل، نستمر مع الأعضاء الآخرين (لا نزيله)
-      }
-    }
-  } finally {
-    pulling = false;
+    await candidate.voice.setChannel(adminChannel.id, 'سحب تلقائي - جلسة دعم');
+    activeSessions.set(candidate.id, {
+      adminId: adminMember.id,
+      startTime: Date.now()
+    });
+    cooldownMap.set(adminMember.id, Date.now() + 15 * 1000);
+    await sendCitizenNotification(candidate.user, adminMember.user);
+    console.log(`✅ تم سحب ${candidate.user.tag} إلى ${adminMember.user.tag}`);
+  } catch (err) {
+    console.error(`⚠️ فشل سحب ${candidate.user.tag}:`, err.message);
   }
 }
 
@@ -941,10 +912,13 @@ async function endSession(guild, citizenId, adminId, startTime) {
   const minutes = Math.floor(durationSec / 60);
   const seconds = durationSec % 60;
   const durationText = minutes > 0 ? `${minutes} دقيقة و ${seconds} ثانية` : `${seconds} ثانية`;
+
   const cooldownKey = `${adminId}_${citizenId}`;
   cooldownMap.set(cooldownKey, Date.now() + 60 * 1000);
+
   const sessionId = `${adminId}_${citizenId}_${startTime}`;
   activeSessions.delete(citizenId);
+
   try {
     const citizenUser = await client.users.fetch(citizenId);
     const row = new ActionRowBuilder().addComponents(
@@ -955,18 +929,21 @@ async function endSession(guild, citizenId, adminId, startTime) {
           .setStyle(r === 5 ? ButtonStyle.Success : ButtonStyle.Secondary)
       )
     );
+
     const dmEmbed = new EmbedBuilder()
       .setColor(0x5865f2)
       .setTitle('📝 تقييم الخدمة')
       .setDescription(`تم الانتهاء من خدمتك بواسطة <@${adminId}> في مدة ${durationText}.\nفضلاً، قيم مستوى المساعدة من 1 إلى 5 نجوم:`)
       .setThumbnail(`attachment://${SERVER_LOGO_FILENAME}`)
       .setTimestamp();
+
     let logoFile = null;
     try {
       if (fs.existsSync(SERVER_LOGO_PATH)) {
         logoFile = new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME });
       }
     } catch (e) {}
+
     await citizenUser.send({
       embeds: [dmEmbed],
       components: [row],
@@ -977,22 +954,12 @@ async function endSession(guild, citizenId, adminId, startTime) {
   }
 }
 
-// ===== دوال قاعدة البيانات للتقييم =====
-function isSessionEvaluated(sessionId) {
-  const stmt = db.prepare('SELECT session_id FROM evaluated_sessions WHERE session_id = ?');
-  return stmt.get(sessionId) !== undefined;
-}
-
-function markSessionEvaluated(sessionId) {
-  const stmt = db.prepare('INSERT OR IGNORE INTO evaluated_sessions (session_id) VALUES (?)');
-  stmt.run(sessionId);
-}
-
 // ============================================================
 // تسجيل الأوامر
 // ============================================================
 client.once(Events.ClientReady, async (c) => {
   console.log(`🤖 البوت شغال باسم ${c.user.tag}`);
+
   const commands = [
     { name: 'leave_panel', description: 'لوحة طلبات الإجازات والاستقالات' },
     { name: 'active_leaves', description: 'عرض الإداريين المأجزين' },
@@ -1013,9 +980,11 @@ client.once(Events.ClientReady, async (c) => {
         { name: 'amount', description: 'عدد الرسائل', type: 4, required: false, min_value: 1, max_value: 100 }
       ]
     },
+    // الأوامر الجديدة
     { name: 'مفتوح', description: 'فتح التفعيل وإرسال إشعار' },
     { name: 'مغلق', description: 'إغلاق التفعيل وإرسال إشعار' }
   ];
+
   try {
     await c.application.commands.set(commands, GUILD_ID);
     console.log('✅ تم تسجيل الأوامر بنجاح.');
@@ -1025,7 +994,7 @@ client.once(Events.ClientReady, async (c) => {
 });
 
 // ============================================================
-// أحداث الصوت (بدون STT) مع Queue محسّنة
+// أحداث الصوت (بدون STT)
 // ============================================================
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const guild = newState.guild || oldState.guild;
@@ -1035,13 +1004,17 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   // ===== تتبع دخول/خروج الإدارة العليا =====
   const isNowInHmRoom = newState.channelId && HM_REQUIRED_VOICE_CHANNEL_IDS.includes(newState.channelId);
   const wasInHmRoom = oldState.channelId && HM_REQUIRED_VOICE_CHANNEL_IDS.includes(oldState.channelId);
+
   if (isNowInHmRoom && hmLeaveTimers.has(userId)) {
     clearTimeout(hmLeaveTimers.get(userId));
     hmLeaveTimers.delete(userId);
     console.log(`✅ ${userId} رجع لروم High Management، تم إلغاء مؤقت الخروج التلقائي.`);
   }
+
   if (wasInHmRoom && !isNowInHmRoom && hmCheckedIn.has(userId)) {
-    if (hmLeaveTimers.has(userId)) clearTimeout(hmLeaveTimers.get(userId));
+    if (hmLeaveTimers.has(userId)) {
+      clearTimeout(hmLeaveTimers.get(userId));
+    }
     const timer = setTimeout(async () => {
       try {
         const currentMember = await guild.members.fetch(userId).catch(() => null);
@@ -1068,6 +1041,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
       await endSession(guild, userId, adminId, session.startTime);
       return;
     }
+
     const adminVoice = adminMember.voice;
     const wasInAdminRoom = oldState.channelId && ADMIN_ROOM_IDS.includes(oldState.channelId);
     const isInAdminRoom = newState.channelId && ADMIN_ROOM_IDS.includes(newState.channelId);
@@ -1089,9 +1063,10 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  // ===== التنبيه الخاص بروم CUSTOM =====
+  // ===== التنبيه الخاص بروم 1483285123008041031 =====
   const isCustomRoom = newState.channelId === CUSTOM_WAITING_ROOM_ID;
   const wasCustomRoom = oldState.channelId === CUSTOM_WAITING_ROOM_ID;
+
   if (isCustomRoom && !wasCustomRoom) {
     const member = await guild.members.fetch(userId).catch(() => null);
     if (member && !hasStaffRole(member)) {
@@ -1127,26 +1102,13 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  // ===== التنبيه العام + إدارة Queue =====
+  // ===== التنبيه العام =====
   const isGeneralWaiting = WAITING_CHANNEL_IDS.includes(newState.channelId) && !WAITING_CHANNEL_IDS.includes(oldState.channelId) && newState.channelId !== CUSTOM_WAITING_ROOM_ID;
   const isLeavingGeneral = WAITING_CHANNEL_IDS.includes(oldState.channelId) && !WAITING_CHANNEL_IDS.includes(newState.channelId) && oldState.channelId !== CUSTOM_WAITING_ROOM_ID;
+
   if (isGeneralWaiting) {
     const member = await guild.members.fetch(userId).catch(() => null);
     if (member && !hasStaffRole(member)) {
-      // منع التكرار: البحث عن وجود مسبق
-      const existing = waitingQueue.find(e => e.userId === userId);
-      if (existing) {
-        existing.channelId = newState.channelId;
-        existing.joinedAt = Date.now();
-      } else {
-        waitingQueue.push({
-          userId: userId,
-          channelId: newState.channelId,
-          joinedAt: Date.now()
-        });
-      }
-      console.log(`➕ تم إضافة/تحديث ${member.user.tag} في قائمة الانتظار.`);
-      // مؤقت التنبيه
       if (waitingTimers.has(userId)) clearTimeout(waitingTimers.get(userId).timeout);
       const timer = setTimeout(async () => {
         try {
@@ -1169,17 +1131,18 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
   if (isLeavingGeneral) {
-    // إزالة من قائمة الانتظار
-    const index = waitingQueue.findIndex(e => e.userId === userId);
-    if (index !== -1) {
-      waitingQueue.splice(index, 1);
-      console.log(`➖ تم إزالة ${userId} من قائمة الانتظار (مغادرة).`);
-    }
     const entry = waitingTimers.get(userId);
     if (entry) { clearTimeout(entry.timeout); waitingTimers.delete(userId); }
   }
 
-  // ===== السحب التلقائي (استدعاء واحد فقط في نهاية الحدث) =====
+  // ===== السحب التلقائي =====
+  const enteredAnyWaiting = WAITING_CHANNEL_IDS.includes(newState.channelId) && !WAITING_CHANNEL_IDS.includes(oldState.channelId);
+  if (enteredAnyWaiting) {
+    const member = await guild.members.fetch(userId).catch(() => null);
+    if (member && !hasStaffRole(member)) {
+      try { await tryPullForAllFreeAdmins(guild); } catch (err) { console.error('❌ خطأ في السحب (enteredWaiting):', err); }
+    }
+  }
   try { await tryPullForAllFreeAdmins(guild); } catch (err) { console.error('خطأ في السحب:', err); }
 });
 
@@ -1189,6 +1152,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 async function safeRoleAction(guild, target, action, roleId, label) {
   const botMember = await guild.members.fetchMe();
   const role = guild.roles.cache.get(roleId);
+
   if (!role) {
     throw new Error(`الرول "${label}" (${roleId}) غير موجود بالسيرفر — تأكد من الآيدي.`);
   }
@@ -1215,16 +1179,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const rating = parseInt(parts[1]);
       const adminId = parts[2];
       const sessionId = parts.slice(3).join('_');
+
       if (isSessionEvaluated(sessionId)) {
         return interaction.reply({ content: '⚠️ تم التقييم مسبقاً.', ephemeral: true });
       }
+
       markSessionEvaluated(sessionId);
+
       const stars = ratingStarsBar(rating);
+
       await interaction.update({
         content: `✅ شكراً لك! (${stars})`,
         embeds: [],
         components: []
       });
+
       try {
         const guild = client.guilds.cache.get(GUILD_ID);
         const channel = guild.channels.cache.get(RATING_CHANNEL_ID);
@@ -1233,6 +1202,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           if (fs.existsSync(SERVER_LOGO_PATH)) {
             files.push(new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME }));
           }
+
           const embed = new EmbedBuilder()
             .setColor(ratingColor(rating))
             .setAuthor({ name: `${interaction.user.username} قيّم الخدمة`, iconURL: interaction.user.displayAvatarURL() })
@@ -1249,14 +1219,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
       } catch (e) {
         console.error('❌ خطأ في إرسال التقييم إلى القناة:', e);
       }
+
       return;
     }
 
     // ===== أزرار تسجيل الدخول/الخروج للإدارة العليا =====
     if (interaction.isButton() && (interaction.customId === 'hm_check_in' || interaction.customId === 'hm_check_out')) {
       const isIn = interaction.customId === 'hm_check_in';
+
       const memberVoiceChannelId = interaction.member.voice.channelId;
       const isInAllowedRoom = memberVoiceChannelId && HM_REQUIRED_VOICE_CHANNEL_IDS.includes(memberVoiceChannelId);
+
       if (!isInAllowedRoom) {
         const roomsList = HM_REQUIRED_VOICE_CHANNEL_IDS.map(id => `<#${id}>`).join('\n');
         return interaction.reply({
@@ -1264,7 +1237,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
           ephemeral: true
         });
       }
+
       const nowTimestamp = Math.floor(Date.now() / 1000);
+
       try {
         const logChannel = interaction.guild.channels.cache.get(HM_LOG_CHANNEL_ID);
         if (logChannel) {
@@ -1280,6 +1255,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             .setTimestamp();
           await logChannel.send({ embeds: [logEmbed] });
         }
+
         if (hmLeaveTimers.has(interaction.user.id)) {
           clearTimeout(hmLeaveTimers.get(interaction.user.id));
           hmLeaveTimers.delete(interaction.user.id);
@@ -1289,6 +1265,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         } else {
           hmCheckedIn.delete(interaction.user.id);
         }
+
         await interaction.reply({
           content: isIn ? '✅ تم تسجيل دخولك (IN).' : '✅ تم تسجيل خروجك (OUT).',
           ephemeral: true
@@ -1331,6 +1308,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.showModal(modal);
         return;
       }
+
       if (interaction.customId === 'open_resign_modal') {
         const modal = new ModalBuilder()
           .setCustomId('resign_modal')
@@ -1349,6 +1327,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.showModal(modal);
         return;
       }
+
       if (interaction.customId === 'open_break_modal') {
         const modal = new ModalBuilder()
           .setCustomId('break_modal')
@@ -1367,15 +1346,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.showModal(modal);
         return;
       }
+
       if (interaction.customId && (interaction.customId.startsWith('req_accept_') || interaction.customId.startsWith('req_reject_'))) {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ هذا الإجراء خاص بالإدارة.', ephemeral: true });
         }
+
         const parts = interaction.customId.split('_');
         const decision = parts[1];
         const reqType = parts[2];
         const requesterId = parts[3];
         const isAccept = decision === 'accept';
+
         const originalEmbed = EmbedBuilder.from(interaction.message.embeds[0]);
         const fields = originalEmbed.data.fields || [];
         const statusIndex = fields.findIndex(f => f.name.includes('الحالة'));
@@ -1383,14 +1365,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (statusIndex >= 0) fields[statusIndex].value = statusValue;
         else fields.push({ name: 'الحالة', value: statusValue });
         originalEmbed.setFields(fields).setColor(isAccept ? 0x2ecc71 : 0xe74c3c);
+
         const disabledRow = new ActionRowBuilder().addComponents(
           interaction.message.components[0].components.map(btn => ButtonBuilder.from(btn).setDisabled(true))
         );
         await interaction.update({ embeds: [originalEmbed], components: [disabledRow] });
+
         if (isAccept) {
           let target = null;
           try {
             target = await interaction.guild.members.fetch(requesterId);
+
             if (reqType === 'leave') {
               await safeRoleAction(interaction.guild, target, () => target.roles.add(LEAVE_ROLE_ID), LEAVE_ROLE_ID, 'رول الإجازة');
               const durationField = originalEmbed.data.fields.find(f => f.name.includes('المدة'));
@@ -1398,7 +1383,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 const match = durationField.value.match(/\d+/);
                 if (match) {
                   const days = parseInt(match[0]);
-                  addLeave(requesterId, Date.now() + days * 24*60*60*1000);
+                  activeLeaves.set(requesterId, { endDate: Date.now() + days * 24*60*60*1000 });
+                  saveActiveLeaves();
                 }
               }
             } else if (reqType === 'resign') {
@@ -1413,7 +1399,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 await safeRoleAction(interaction.guild, target, () => target.roles.remove(LEAVE_ROLE_ID), LEAVE_ROLE_ID, 'رول الإجازة');
               }
               if (activeLeaves.has(requesterId)) {
-                removeLeave(requesterId);
+                activeLeaves.delete(requesterId);
+                saveActiveLeaves();
               }
             }
           } catch (e) {
@@ -1424,6 +1411,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             }).catch(() => null);
           }
         }
+
         try {
           const user = await client.users.fetch(requesterId);
           const typeLabels = { leave: 'إجازة', resign: 'استقالة', break: 'كسر إجازة' };
@@ -1453,6 +1441,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setTimestamp();
       const mentionContent = LEAVE_REQUEST_MENTION_ROLE_IDS.map(id => `<@&${id}>`).join(' ');
       const mentionAllowed = { roles: LEAVE_REQUEST_MENTION_ROLE_IDS };
+
       if (interaction.customId === 'leave_modal') {
         const duration = parseInt(interaction.fields.getTextInputValue('leave_duration'));
         const reason = interaction.fields.getTextInputValue('leave_reason');
@@ -1471,6 +1460,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await requestsChannel.send({ content: mentionContent, embeds: [embed], components: [row], allowedMentions: mentionAllowed });
         return interaction.reply({ content: '✅ تم إرسال طلب الإجازة.', ephemeral: true });
       }
+
       if (interaction.customId === 'resign_modal') {
         const reason = interaction.fields.getTextInputValue('resign_reason');
         const embed = buildEmbed('طلب استقالة', [
@@ -1484,6 +1474,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await requestsChannel.send({ content: mentionContent, embeds: [embed], components: [row], allowedMentions: mentionAllowed });
         return interaction.reply({ content: '✅ تم إرسال طلب الاستقالة.', ephemeral: true });
       }
+
       if (interaction.customId === 'break_modal') {
         const reason = interaction.fields.getTextInputValue('break_reason');
         const embed = buildEmbed('طلب كسر إجازة', [
@@ -1533,10 +1524,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
           new ButtonBuilder().setCustomId('open_break_modal').setLabel('كسر إجازة').setEmoji('🔓').setStyle(ButtonStyle.Secondary),
           new ButtonBuilder().setCustomId('open_resign_modal').setLabel('استقالة').setEmoji('📝').setStyle(ButtonStyle.Danger)
         );
+
         const files = [];
         if (fs.existsSync(LEAVE_BANNER_PATH)) {
           files.push(new AttachmentBuilder(LEAVE_BANNER_PATH, { name: LEAVE_BANNER_FILENAME }));
         }
+
         const channel = await interaction.guild.channels.fetch(LEAVE_EMBED_CHANNEL_ID);
         await channel.send({ embeds: [panelEmbed], components: [row], files });
         return interaction.reply({ content: `✅ تم إرسال اللوحة إلى <#${LEAVE_EMBED_CHANNEL_ID}>.`, ephemeral: true });
@@ -1550,7 +1543,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         let index = 1;
         for (const [userId, data] of activeLeaves) {
           const remaining = data.endDate - Date.now();
-          if (remaining <= 0) { removeLeave(userId); continue; }
+          if (remaining <= 0) { activeLeaves.delete(userId); saveActiveLeaves(); continue; }
           const days = Math.floor(remaining / (1000*60*60*24));
           const hours = Math.floor((remaining % (1000*60*60*24)) / (1000*60*60));
           desc += `**${index}.** <@${userId}> — متبقي: \`${days} يوم و ${hours} ساعة\`\n`;
@@ -1568,44 +1561,62 @@ client.on(Events.InteractionCreate, async (interaction) => {
             ephemeral: true 
           });
         }
+
         await interaction.deferReply();
+
         const guild = interaction.guild;
+        
         console.log('==================== بدء جرد فريق التفعيل (آخر 7 أيام) ====================');
         console.log('🔄 جاري جلب جميع أعضاء السيرفر...');
         await guild.members.fetch({ withPresences: false, force: true });
         console.log(`✅ تم جلب ${guild.members.cache.size} عضو.`);
+
         const targetRoleId = '1486587636863864862';
         console.log(`🎯 الرتبة المستهدفة: ${targetRoleId}`);
+
         const role = guild.roles.cache.get(targetRoleId);
         if (!role) {
           console.log('❌ الرتبة غير موجودة!');
           return interaction.editReply({ content: '❌ الرتبة غير موجودة.' });
         }
         console.log(`✅ تم العثور على الرتبة: "${role.name}" (${role.id})`);
+
         const members = role.members;
         console.log(`📊 عدد الأعضاء في role.members: ${members.size}`);
+
         if (members.size === 0) {
           return interaction.editReply({ content: '❌ لا يوجد أعضاء في فريق التفعيل.' });
         }
+
+        console.log('🔄 جاري جلب تواريخ آخر ترقية لكل إداري من قناة الترقيات...');
+        const lastPromotionMap = await getLastPromotionDate(guild);
+        console.log(`✅ تم جلب تواريخ الترقية لـ ${lastPromotionMap.size} إداري.`);
+
         console.log('🔄 جاري جلب تواريخ رتبة الدعم من روم السجل...');
         const supportRoleChannelDateMap = await getSupportRoleChannelDates(guild);
         console.log(`✅ تم جلب تواريخ رتبة الدعم لـ ${supportRoleChannelDateMap.size} إداري من الروم.`);
+
         console.log('🔄 جاري جلب إجمالي ساعات كل إداري من روم سجل الساعات...');
         const totalHoursMap = await getTotalHoursMap(guild, [...members.keys()]);
         console.log(`✅ تم جلب إجمالي الساعات لـ ${totalHoursMap.size} إداري.`);
+
         const activateChannel = '1484859915200626829';
         const rejectChannel = '1484865429158756494';
         const reactivateChannel = '1493565275428225125';
+
         const days = 7;
         const [activateMsgs, rejectMsgs, reactivateMsgs] = await Promise.all([
           fetchMessagesFromDate(activateChannel, Date.now() - days * 24 * 60 * 60 * 1000),
           fetchMessagesFromDate(rejectChannel, Date.now() - days * 24 * 60 * 60 * 1000),
           fetchMessagesFromDate(reactivateChannel, Date.now() - days * 24 * 60 * 60 * 1000)
         ]);
+
         console.log(`📊 عدد رسائل التفعيل (آخر ${days} يوم): ${activateMsgs.length}`);
         console.log(`📊 عدد رسائل الرفض (آخر ${days} يوم): ${rejectMsgs.length}`);
         console.log(`📊 عدد رسائل إعادة التفعيل (آخر ${days} يوم): ${reactivateMsgs.length}`);
+
         const cutoffDate = Date.now() - days * 24 * 60 * 60 * 1000;
+
         const statsById = new Map();
         for (const [id, member] of members) {
           const promotes = activateMsgs.filter(msg => 
@@ -1617,11 +1628,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const reactivates = reactivateMsgs.filter(msg => 
             msg.createdTimestamp >= cutoffDate && msg.content.includes(`<@${id}>`)
           ).length;
+
           const totalSeconds = totalHoursMap.get(id) || 0;
+
           statsById.set(id, { member, activates: promotes, rejects, reactivates, totalSeconds });
         }
+
         const assignedIds = new Set();
         const groupedByRole = [];
+
         for (const roleId of ALLOWED_ROLE_IDS) {
           const roleObj = guild.roles.cache.get(roleId);
           const entries = [];
@@ -1635,13 +1650,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
           entries.sort((a, b) => b.activates - a.activates);
           groupedByRole.push({ roleId, roleObj, entries });
         }
+
         const noRoleEntries = [];
         for (const [id, stat] of statsById) {
           if (!assignedIds.has(id)) noRoleEntries.push(stat);
         }
         noRoleEntries.sort((a, b) => b.activates - a.activates);
+
         let bodyText = '';
         let totalCount = 0;
+
         for (const group of groupedByRole) {
           if (group.entries.length === 0) continue;
           const roleLabel = group.roleObj ? group.roleObj.name : 'رتبة غير موجودة';
@@ -1656,6 +1674,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             totalCount++;
           }
         }
+
         if (noRoleEntries.length > 0) {
           bodyText += `\n__**بدون رتبة من القائمة**__\n`;
           bodyText += `━━━━━━━━━━━━━━━━━━\n`;
@@ -1668,14 +1687,90 @@ client.on(Events.InteractionCreate, async (interaction) => {
             totalCount++;
           }
         }
+
         const header = `📊 جرد فريق التفعيل (آخر 7 أيام)\n\n`;
         const footer = `\n**تم جرد ${totalCount} شخص.**`;
+
+        const MAX_MSG_LENGTH = 2000;
         const fullText = header + bodyText + footer;
+
         const files = [];
         if (fs.existsSync(SERVER_LOGO_PATH)) {
           files.push(new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME }));
         }
-        await sendLongReply(interaction, fullText, files);
+
+        if (fullText.length <= MAX_MSG_LENGTH) {
+          await interaction.editReply({ content: fullText, files });
+          console.log('✅ تم إرسال النص كاملاً.');
+        } else {
+          const parts = [];
+          let currentPart = '';
+          const lines = bodyText.split('\n');
+          for (const line of lines) {
+            const testPart = currentPart + line + '\n';
+            const testFull = header + testPart + footer;
+            if (testFull.length > MAX_MSG_LENGTH && currentPart.length > 0) {
+              parts.push(currentPart);
+              currentPart = '';
+            }
+            currentPart += (currentPart ? '\n' : '') + line;
+          }
+          if (currentPart) parts.push(currentPart);
+
+          console.log(`📊 عدد الأجزاء: ${parts.length}`);
+
+          for (let i = 0; i < parts.length; i++) {
+            let content;
+            if (i === 0) {
+              content = header + parts[i];
+            } else if (i === parts.length - 1) {
+              content = parts[i] + footer;
+            } else {
+              content = parts[i];
+            }
+
+            if (content.length > MAX_MSG_LENGTH) {
+              const subParts = [];
+              let sub = '';
+              const subLines = content.split('\n');
+              for (const sl of subLines) {
+                if ((sub + sl + '\n').length > MAX_MSG_LENGTH) {
+                  subParts.push(sub);
+                  sub = '';
+                }
+                sub += (sub ? '\n' : '') + sl;
+              }
+              if (sub) subParts.push(sub);
+              for (let j = 0; j < subParts.length; j++) {
+                const subContent = (i === 0 && j === 0) ? header + subParts[j] : subParts[j];
+                if (i === parts.length - 1 && j === subParts.length - 1) {
+                  const finalContent = subContent + footer;
+                  if (j === 0 && i === 0) {
+                    await interaction.editReply({ content: finalContent, files });
+                  } else {
+                    await interaction.followUp({ content: finalContent });
+                  }
+                } else {
+                  if (j === 0 && i === 0) {
+                    await interaction.editReply({ content: subContent, files });
+                  } else {
+                    await interaction.followUp({ content: subContent });
+                  }
+                }
+              }
+              continue;
+            }
+
+            if (i === 0) {
+              await interaction.editReply({ content: content, files });
+            } else {
+              await interaction.followUp({ content: content });
+            }
+            console.log(`✅ تم إرسال الجزء ${i+1}`);
+          }
+          console.log('✅ تم إرسال جميع الأجزاء بنجاح.');
+        }
+
         console.log(`✅ اكتمل الجرد (آخر 7 أيام): ${totalCount} شخص.`);
         console.log('==============================================================\n');
       }
@@ -1688,51 +1783,66 @@ client.on(Events.InteractionCreate, async (interaction) => {
             ephemeral: true
           });
         }
+
         await interaction.deferReply();
+
         const guild = interaction.guild;
+
         console.log('==================== بدء جرد فريق الرقابة ====================');
         console.log('🔄 جاري جلب جميع أعضاء السيرفر...');
         await guild.members.fetch({ withPresences: false, force: true });
         console.log(`✅ تم جلب ${guild.members.cache.size} عضو.`);
+
         const targetRoleId = CENSORSHIP_TEAM_ROLE_ID;
         console.log(`🎯 الرتبة المستهدفة: ${targetRoleId}`);
+
         const role = guild.roles.cache.get(targetRoleId);
         if (!role) {
           console.log('❌ الرتبة غير موجودة!');
           return interaction.editReply({ content: '❌ الرتبة غير موجودة.' });
         }
         console.log(`✅ تم العثور على الرتبة: "${role.name}" (${role.id})`);
+
         const members = role.members;
         console.log(`📊 عدد الأعضاء في role.members: ${members.size}`);
+
         if (members.size === 0) {
           return interaction.editReply({ content: '❌ لا يوجد أعضاء في فريق الرقابة.' });
         }
+
         const cutoffDate = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
         const activityChannel = guild.channels.cache.get(CENSORSHIP_ACTIVITY_CHANNEL_ID);
         if (!activityChannel) {
           console.error(`❌ قناة النشاط ${CENSORSHIP_ACTIVITY_CHANNEL_ID} غير موجودة!`);
           return interaction.editReply({ content: '❌ قناة النشاط غير موجودة.' });
         }
+
         console.log('🔄 حساب رسائل "done" بأنماط متعددة من آخر 7 أيام...');
         const doneCounts = await countDoneMessagesPerUser(activityChannel, new Set(members.keys()), cutoffDate);
         console.log(`✅ تم حساب رسائل "done" لـ ${doneCounts.size} عضو.`);
+
         const banPattern = /باند|بان|طرد|حظر/i;
         const banChannel = guild.channels.cache.get(CENSORSHIP_BAN_CHANNEL_ID);
         if (!banChannel) {
           console.error(`❌ قناة الباند ${CENSORSHIP_BAN_CHANNEL_ID} غير موجودة!`);
           return interaction.editReply({ content: '❌ قناة الباند غير موجودة.' });
         }
-        console.log('🔄 حساب رسائل الباند التي تطابق النمط (آخر 7 أيام)...');
-        const banCounts = await countMessagesWithPattern(banChannel, new Set(members.keys()), banPattern, cutoffDate);
+
+        console.log('🔄 حساب رسائل الباند التي تطابق النمط...');
+        const banCounts = await countMessagesWithPattern(banChannel, new Set(members.keys()), banPattern);
         console.log(`✅ تم حساب رسائل الباند لـ ${banCounts.size} عضو.`);
+
         const ratingChannel = guild.channels.cache.get(RATING_CHANNEL_ID);
         if (!ratingChannel) {
           console.error(`❌ قناة التقييمات ${RATING_CHANNEL_ID} غير موجودة!`);
           return interaction.editReply({ content: '❌ قناة التقييمات غير موجودة.' });
         }
-        console.log('🔄 جلب جميع التقييمات من قناة التقييمات (آخر 7 أيام)...');
-        const ratingsData = await getAdminRatings(ratingChannel, cutoffDate);
+
+        console.log('🔄 جلب جميع التقييمات من قناة التقييمات...');
+        const ratingsData = await getAdminRatings(ratingChannel);
         console.log(`✅ تم جلب تقييمات لـ ${ratingsData.size} إداري.`);
+
         const statsById = new Map();
         for (const [id, member] of members) {
           const doneCount = doneCounts.get(id) || 0;
@@ -1740,10 +1850,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const ratingInfo = ratingsData.get(id);
           const avgRating = ratingInfo ? ratingInfo.average : 0;
           const ratingCount = ratingInfo ? ratingInfo.count : 0;
-          statsById.set(id, { member, doneCount, bans, avgRating, ratingCount });
+
+          statsById.set(id, {
+            member,
+            doneCount,
+            bans,
+            avgRating,
+            ratingCount
+          });
         }
+
         const assignedIds = new Set();
         const groupedByRole = [];
+
         for (const roleId of ALLOWED_ROLE_IDS) {
           const roleObj = guild.roles.cache.get(roleId);
           const entries = [];
@@ -1757,13 +1876,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
           entries.sort((a, b) => b.doneCount - a.doneCount || b.avgRating - a.avgRating);
           groupedByRole.push({ roleId, roleObj, entries });
         }
+
         const noRoleEntries = [];
         for (const [id, stat] of statsById) {
           if (!assignedIds.has(id)) noRoleEntries.push(stat);
         }
         noRoleEntries.sort((a, b) => b.doneCount - a.doneCount || b.avgRating - a.avgRating);
+
         let bodyText = '';
         let totalCount = 0;
+
         for (const group of groupedByRole) {
           if (group.entries.length === 0) continue;
           const roleLabel = group.roleObj ? group.roleObj.name : 'رتبة غير موجودة';
@@ -1779,6 +1901,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             totalCount++;
           }
         }
+
         if (noRoleEntries.length > 0) {
           bodyText += `\n__**بدون رتبة من القائمة**__\n`;
           bodyText += `━━━━━━━━━━━━━━━━━━\n`;
@@ -1793,14 +1916,90 @@ client.on(Events.InteractionCreate, async (interaction) => {
             totalCount++;
           }
         }
+
         const header = `📊 جرد فريق الرقابة (آخر 7 أيام)\n\n`;
         const footer = `\n**تم جرد ${totalCount} شخص.**`;
+
+        const MAX_MSG_LENGTH = 2000;
         const fullText = header + bodyText + footer;
+
         const files = [];
         if (fs.existsSync(SERVER_LOGO_PATH)) {
           files.push(new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME }));
         }
-        await sendLongReply(interaction, fullText, files);
+
+        if (fullText.length <= MAX_MSG_LENGTH) {
+          await interaction.editReply({ content: fullText, files });
+          console.log('✅ تم إرسال النص كاملاً.');
+        } else {
+          const parts = [];
+          let currentPart = '';
+          const lines = bodyText.split('\n');
+          for (const line of lines) {
+            const testPart = currentPart + line + '\n';
+            const testFull = header + testPart + footer;
+            if (testFull.length > MAX_MSG_LENGTH && currentPart.length > 0) {
+              parts.push(currentPart);
+              currentPart = '';
+            }
+            currentPart += (currentPart ? '\n' : '') + line;
+          }
+          if (currentPart) parts.push(currentPart);
+
+          console.log(`📊 عدد الأجزاء: ${parts.length}`);
+
+          for (let i = 0; i < parts.length; i++) {
+            let content;
+            if (i === 0) {
+              content = header + parts[i];
+            } else if (i === parts.length - 1) {
+              content = parts[i] + footer;
+            } else {
+              content = parts[i];
+            }
+
+            if (content.length > MAX_MSG_LENGTH) {
+              const subParts = [];
+              let sub = '';
+              const subLines = content.split('\n');
+              for (const sl of subLines) {
+                if ((sub + sl + '\n').length > MAX_MSG_LENGTH) {
+                  subParts.push(sub);
+                  sub = '';
+                }
+                sub += (sub ? '\n' : '') + sl;
+              }
+              if (sub) subParts.push(sub);
+              for (let j = 0; j < subParts.length; j++) {
+                const subContent = (i === 0 && j === 0) ? header + subParts[j] : subParts[j];
+                if (i === parts.length - 1 && j === subParts.length - 1) {
+                  const finalContent = subContent + footer;
+                  if (j === 0 && i === 0) {
+                    await interaction.editReply({ content: finalContent, files });
+                  } else {
+                    await interaction.followUp({ content: finalContent });
+                  }
+                } else {
+                  if (j === 0 && i === 0) {
+                    await interaction.editReply({ content: subContent, files });
+                  } else {
+                    await interaction.followUp({ content: subContent });
+                  }
+                }
+              }
+              continue;
+            }
+
+            if (i === 0) {
+              await interaction.editReply({ content: content, files });
+            } else {
+              await interaction.followUp({ content: content });
+            }
+            console.log(`✅ تم إرسال الجزء ${i+1}`);
+          }
+          console.log('✅ تم إرسال جميع الأجزاء بنجاح.');
+        }
+
         console.log(`✅ اكتمل جرد فريق الرقابة: ${totalCount} شخص.`);
         console.log('==============================================================\n');
       }
@@ -1810,15 +2009,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
         }
+
         const hmEmbed = new EmbedBuilder()
           .setTitle('HighMangment Login - Logout')
           .setDescription(`• Login : تسجيل دخول\n• Logout : تسجيل خروج`)
           .setColor(0x2b2d31)
           .setTimestamp();
+
         const hmRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId('hm_check_in').setLabel('Login').setStyle(ButtonStyle.Success),
           new ButtonBuilder().setCustomId('hm_check_out').setLabel('Logout').setStyle(ButtonStyle.Danger)
         );
+
         const hmFiles = [];
         if (fs.existsSync(HM_BANNER_PATH)) {
           hmFiles.push(new AttachmentBuilder(HM_BANNER_PATH, { name: HM_BANNER_FILENAME }));
@@ -1832,6 +2034,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         } else {
           console.error(`⚠️ ملف اللوقو غير موجود: ${SERVER_LOGO_PATH}`);
         }
+
         try {
           const hmChannel = await interaction.guild.channels.fetch(HM_PANEL_CHANNEL_ID);
           await hmChannel.send({ embeds: [hmEmbed], components: [hmRow], files: hmFiles });
@@ -1845,12 +2048,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // /privacy
       if (interaction.commandName === 'privacy') {
         const privacyUrl = process.env.PRIVACY_POLICY_URL;
+
         if (privacyUrl) {
           const embed = new EmbedBuilder()
             .setTitle('🔒 سياسة الخصوصية')
             .setDescription(`يمكنك الاطلاع على سياسة الخصوصية الخاصة بنا من خلال الرابط التالي:\n[اضغط هنا لقراءة السياسة](${privacyUrl})`)
             .setColor(0x5865f2)
             .setTimestamp();
+          
           return interaction.reply({ embeds: [embed], ephemeral: true });
         } else {
           return interaction.reply({ 
@@ -1896,14 +2101,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages) && !hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ ليس لديك صلاحية لاستخدام هذا الأمر.', flags: 64 });
         }
+
         const targetChannel = interaction.options.getChannel('channel') || interaction.channel;
         const amount = interaction.options.getInteger('amount');
+
         if (!targetChannel.isTextBased()) {
           return interaction.reply({ content: '❌ يجب تحديد روم نصية فقط.', flags: 64 });
         }
+
         await interaction.deferReply({ flags: 64 });
+
         try {
           let deletedCount = 0;
+
           if (amount) {
             const messages = await targetChannel.messages.fetch({ limit: amount });
             const deleted = await targetChannel.bulkDelete(messages, true);
@@ -1919,9 +2129,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
               }
             } while (fetched.size >= 2);
           }
+
           return interaction.editReply({
             content: `✅ تم بنجاح حذف **${deletedCount}** رسالة من الروم ${targetChannel}.`
           });
+
         } catch (err) {
           console.error('❌ خطأ أثناء تنفيذ أمر clear:', err);
           return interaction.editReply({
@@ -1932,22 +2144,26 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       // ===== أوامر التفعيل الجديدة: /مفتوح و /مغلق =====
       if (interaction.commandName === 'مفتوح') {
+        // التحقق من الصلاحية (الرتب المسموحة)
         const allowedRoleIds = ['1486588170282733700', '1524667894711980173'];
         const memberRoles = interaction.member.roles.cache.map(r => r.id);
         const hasPermission = allowedRoleIds.some(roleId => memberRoles.includes(roleId));
         if (!hasPermission) {
           return interaction.reply({ content: '❌ ليس لديك الصلاحية لاستخدام هذا الأمر.', ephemeral: true });
         }
+
         const targetChannelId = '1461735934499487754';
         const channel = interaction.guild.channels.cache.get(targetChannelId);
         if (!channel) {
           return interaction.reply({ content: '❌ القناة المحددة غير موجودة.', ephemeral: true });
         }
+
         const message = `**حالة التفعيل [مفتوح  <:z5:1470889445602365571>  ]**
 
 https://discord.com/channels/1403099156016533557/1483285123008041031
 
 ***||@everyone||***`;
+
         try {
           await channel.send(message);
           return interaction.reply({ content: '✅ تم إرسال إشعار التفعيل المفتوح.', ephemeral: true });
@@ -1958,22 +2174,26 @@ https://discord.com/channels/1403099156016533557/1483285123008041031
       }
 
       if (interaction.commandName === 'مغلق') {
+        // التحقق من الصلاحية
         const allowedRoleIds = ['1486588170282733700', '1524667894711980173'];
         const memberRoles = interaction.member.roles.cache.map(r => r.id);
         const hasPermission = allowedRoleIds.some(roleId => memberRoles.includes(roleId));
         if (!hasPermission) {
           return interaction.reply({ content: '❌ ليس لديك الصلاحية لاستخدام هذا الأمر.', ephemeral: true });
         }
+
         const targetChannelId = '1461735934499487754';
         const channel = interaction.guild.channels.cache.get(targetChannelId);
         if (!channel) {
           return interaction.reply({ content: '❌ القناة المحددة غير موجودة.', ephemeral: true });
         }
+
         const message = `**حالة التفعيل [مغلق❌   ]**
 
 https://discord.com/channels/1403099156016533557/1483285123008041031
 
 ***||@everyone||***`;
+
         try {
           await channel.send(message);
           return interaction.reply({ content: '✅ تم إرسال إشعار التفعيل المغلق.', ephemeral: true });
@@ -1993,28 +2213,6 @@ https://discord.com/channels/1403099156016533557/1483285123008041031
   }
 });
 
-// ============================================================
-// تنظيف الـ cooldownMap كل 30 ثانية
-// ============================================================
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, expiresAt] of cooldownMap) {
-    if (expiresAt <= now) {
-      cooldownMap.delete(key);
-    }
-  }
-}, 30 * 1000);
-
-// ============================================================
-// تنظيف الإجازات المنتهية كل دقيقة (مع تمرير guild)
-// ============================================================
-setInterval(async () => {
-  const guild = client.guilds.cache.get(GUILD_ID);
-  if (guild) {
-    await cleanupExpiredLeaves(guild);
-  }
-}, 60 * 1000);
-
 app.listen(PORT, () => console.log(`🌐 سيرفر HTTP شغال على بورت ${PORT} (فحص Render فقط).`));
 
 // ============================================================
@@ -2022,12 +2220,13 @@ app.listen(PORT, () => console.log(`🌐 سيرفر HTTP شغال على بور�
 // ============================================================
 process.on('SIGINT', () => {
   console.log('🔄 حفظ البيانات...');
-  // لا حاجة لحفظ كامل، البيانات محدثة بشكل فردي
+  saveActiveLeaves();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
   console.log('🔄 حفظ البيانات...');
+  saveActiveLeaves();
   process.exit(0);
 });
 
