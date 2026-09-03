@@ -980,16 +980,23 @@ client.once(Events.ClientReady, async (c) => {
         { name: 'amount', description: 'عدد الرسائل', type: 4, required: false, min_value: 1, max_value: 100 }
       ]
     },
-    // الأوامر الجديدة
     { name: 'مفتوح', description: 'فتح التفعيل وإرسال إشعار' },
     { name: 'مغلق', description: 'إغلاق التفعيل وإرسال إشعار' }
   ];
 
   try {
-    await c.application.commands.set(commands, GUILD_ID);
-    console.log('✅ تم تسجيل الأوامر بنجاح.');
+    // 🔧 التغيير الجوهري: التسجيل عالمي بدلاً من سيرفر محدد
+    await c.application.commands.set(commands);
+    console.log('✅ تم تسجيل الأوامر (عالمية).');
   } catch (error) {
-    console.error('❌ خطأ في تسجيل الأوامر:', error);
+    console.error('❌ فشل تسجيل الأوامر العالمية:', error);
+    // محاولة تسجيلها في السيرفر المحدد كحل بديل (قد يفشل أيضاً)
+    try {
+      await c.application.commands.set(commands, GUILD_ID);
+      console.log('✅ تم تسجيل الأوامر في السيرفر (كحل احتياطي).');
+    } catch (err2) {
+      console.error('❌ فشل تسجيل الأوامر في السيرفر أيضاً:', err2);
+    }
   }
 });
 
