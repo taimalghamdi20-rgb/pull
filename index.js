@@ -955,7 +955,7 @@ async function endSession(guild, citizenId, adminId, startTime) {
 }
 
 // ============================================================
-// تسجيل الأوامر
+// تسجيل الأوامر (معدل)
 // ============================================================
 client.once(Events.ClientReady, async (c) => {
   console.log(`🤖 البوت شغال باسم ${c.user.tag}`);
@@ -985,12 +985,12 @@ client.once(Events.ClientReady, async (c) => {
   ];
 
   try {
-    // 🔧 التغيير الجوهري: التسجيل عالمي بدلاً من سيرفر محدد
+    // تسجيل الأوامر عالمياً (بدون GUILD_ID) لتجنب Missing Access
     await c.application.commands.set(commands);
     console.log('✅ تم تسجيل الأوامر (عالمية).');
   } catch (error) {
     console.error('❌ فشل تسجيل الأوامر العالمية:', error);
-    // محاولة تسجيلها في السيرفر المحدد كحل بديل (قد يفشل أيضاً)
+    // محاولة تسجيلها في السيرفر المحدد كحل بديل
     try {
       await c.application.commands.set(commands, GUILD_ID);
       console.log('✅ تم تسجيل الأوامر في السيرفر (كحل احتياطي).');
@@ -1176,7 +1176,7 @@ async function safeRoleAction(guild, target, action, roleId, label) {
 }
 
 // ============================================================
-// معالج التفاعلات (الإجازات + التقييم + الأوامر)
+// معالج التفاعلات (الإجازات + التقييم + الأوامر) - تم تعديله
 // ============================================================
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
@@ -1286,153 +1286,165 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    // ===== باقي الأزرار (الإجازات) =====
+    // ===== باقي الأزرار (الإجازات) - تم إضافة try/catch حول كل زر =====
     if (interaction.isButton()) {
-      if (interaction.customId === 'open_leave_modal') {
-        const modal = new ModalBuilder()
-          .setCustomId('leave_modal')
-          .setTitle('📄 طلب إجازة')
-          .addComponents(
-            new ActionRowBuilder().addComponents(
-              new TextInputBuilder()
-                .setCustomId('leave_duration')
-                .setLabel(`عدد الأيام (أقصى ${MAX_LEAVE_DAYS})`)
-                .setStyle(TextInputStyle.Short)
-                .setPlaceholder('مثال: 3')
-                .setRequired(true)
-                .setMaxLength(2)
-            ),
-            new ActionRowBuilder().addComponents(
-              new TextInputBuilder()
-                .setCustomId('leave_reason')
-                .setLabel('سبب الإجازة')
-                .setStyle(TextInputStyle.Paragraph)
-                .setPlaceholder('اكتب السبب بالتفصيل')
-                .setRequired(true)
-                .setMaxLength(500)
-            )
-          );
-        await interaction.showModal(modal);
-        return;
-      }
-
-      if (interaction.customId === 'open_resign_modal') {
-        const modal = new ModalBuilder()
-          .setCustomId('resign_modal')
-          .setTitle('📝 طلب استقالة')
-          .addComponents(
-            new ActionRowBuilder().addComponents(
-              new TextInputBuilder()
-                .setCustomId('resign_reason')
-                .setLabel('سبب الاستقالة')
-                .setStyle(TextInputStyle.Paragraph)
-                .setPlaceholder('اكتب السبب بالتفصيل')
-                .setRequired(true)
-                .setMaxLength(500)
-            )
-          );
-        await interaction.showModal(modal);
-        return;
-      }
-
-      if (interaction.customId === 'open_break_modal') {
-        const modal = new ModalBuilder()
-          .setCustomId('break_modal')
-          .setTitle('🔓 طلب كسر إجازة')
-          .addComponents(
-            new ActionRowBuilder().addComponents(
-              new TextInputBuilder()
-                .setCustomId('break_reason')
-                .setLabel('سبب كسر الإجازة')
-                .setStyle(TextInputStyle.Paragraph)
-                .setPlaceholder('اكتب السبب بالتفصيل')
-                .setRequired(true)
-                .setMaxLength(500)
-            )
-          );
-        await interaction.showModal(modal);
-        return;
-      }
-
-      if (interaction.customId && (interaction.customId.startsWith('req_accept_') || interaction.customId.startsWith('req_reject_'))) {
-        if (!hasStaffRole(interaction.member)) {
-          return interaction.reply({ content: '❌ هذا الإجراء خاص بالإدارة.', ephemeral: true });
+      try {
+        // زر طلب إجازة
+        if (interaction.customId === 'open_leave_modal') {
+          const modal = new ModalBuilder()
+            .setCustomId('leave_modal')
+            .setTitle('📄 طلب إجازة')
+            .addComponents(
+              new ActionRowBuilder().addComponents(
+                new TextInputBuilder()
+                  .setCustomId('leave_duration')
+                  .setLabel(`عدد الأيام (أقصى ${MAX_LEAVE_DAYS})`)
+                  .setStyle(TextInputStyle.Short)
+                  .setPlaceholder('مثال: 3')
+                  .setRequired(true)
+                  .setMaxLength(2)
+              ),
+              new ActionRowBuilder().addComponents(
+                new TextInputBuilder()
+                  .setCustomId('leave_reason')
+                  .setLabel('سبب الإجازة')
+                  .setStyle(TextInputStyle.Paragraph)
+                  .setPlaceholder('اكتب السبب بالتفصيل')
+                  .setRequired(true)
+                  .setMaxLength(500)
+              )
+            );
+          await interaction.showModal(modal);
+          return;
         }
 
-        const parts = interaction.customId.split('_');
-        const decision = parts[1];
-        const reqType = parts[2];
-        const requesterId = parts[3];
-        const isAccept = decision === 'accept';
+        // زر كسر إجازة
+        if (interaction.customId === 'open_break_modal') {
+          const modal = new ModalBuilder()
+            .setCustomId('break_modal')
+            .setTitle('🔓 طلب كسر إجازة')
+            .addComponents(
+              new ActionRowBuilder().addComponents(
+                new TextInputBuilder()
+                  .setCustomId('break_reason')
+                  .setLabel('سبب كسر الإجازة')
+                  .setStyle(TextInputStyle.Paragraph)
+                  .setPlaceholder('اكتب السبب بالتفصيل')
+                  .setRequired(true)
+                  .setMaxLength(500)
+              )
+            );
+          await interaction.showModal(modal);
+          return;
+        }
 
-        const originalEmbed = EmbedBuilder.from(interaction.message.embeds[0]);
-        const fields = originalEmbed.data.fields || [];
-        const statusIndex = fields.findIndex(f => f.name.includes('الحالة'));
-        const statusValue = `\`\`\`\n${isAccept ? '✅ تم القبول' : '❌ تم الرفض'} بواسطة ${interaction.user.username}\n\`\`\``;
-        if (statusIndex >= 0) fields[statusIndex].value = statusValue;
-        else fields.push({ name: 'الحالة', value: statusValue });
-        originalEmbed.setFields(fields).setColor(isAccept ? 0x2ecc71 : 0xe74c3c);
+        // زر استقالة
+        if (interaction.customId === 'open_resign_modal') {
+          const modal = new ModalBuilder()
+            .setCustomId('resign_modal')
+            .setTitle('📝 طلب استقالة')
+            .addComponents(
+              new ActionRowBuilder().addComponents(
+                new TextInputBuilder()
+                  .setCustomId('resign_reason')
+                  .setLabel('سبب الاستقالة')
+                  .setStyle(TextInputStyle.Paragraph)
+                  .setPlaceholder('اكتب السبب بالتفصيل')
+                  .setRequired(true)
+                  .setMaxLength(500)
+              )
+            );
+          await interaction.showModal(modal);
+          return;
+        }
 
-        const disabledRow = new ActionRowBuilder().addComponents(
-          interaction.message.components[0].components.map(btn => ButtonBuilder.from(btn).setDisabled(true))
-        );
-        await interaction.update({ embeds: [originalEmbed], components: [disabledRow] });
+        // أزرار قبول/رفض الطلبات
+        if (interaction.customId && (interaction.customId.startsWith('req_accept_') || interaction.customId.startsWith('req_reject_'))) {
+          if (!hasStaffRole(interaction.member)) {
+            return interaction.reply({ content: '❌ هذا الإجراء خاص بالإدارة.', ephemeral: true });
+          }
 
-        if (isAccept) {
-          let target = null;
-          try {
-            target = await interaction.guild.members.fetch(requesterId);
+          const parts = interaction.customId.split('_');
+          const decision = parts[1];
+          const reqType = parts[2];
+          const requesterId = parts[3];
+          const isAccept = decision === 'accept';
 
-            if (reqType === 'leave') {
-              await safeRoleAction(interaction.guild, target, () => target.roles.add(LEAVE_ROLE_ID), LEAVE_ROLE_ID, 'رول الإجازة');
-              const durationField = originalEmbed.data.fields.find(f => f.name.includes('المدة'));
-              if (durationField) {
-                const match = durationField.value.match(/\d+/);
-                if (match) {
-                  const days = parseInt(match[0]);
-                  activeLeaves.set(requesterId, { endDate: Date.now() + days * 24*60*60*1000 });
+          const originalEmbed = EmbedBuilder.from(interaction.message.embeds[0]);
+          const fields = originalEmbed.data.fields || [];
+          const statusIndex = fields.findIndex(f => f.name.includes('الحالة'));
+          const statusValue = `\`\`\`\n${isAccept ? '✅ تم القبول' : '❌ تم الرفض'} بواسطة ${interaction.user.username}\n\`\`\``;
+          if (statusIndex >= 0) fields[statusIndex].value = statusValue;
+          else fields.push({ name: 'الحالة', value: statusValue });
+          originalEmbed.setFields(fields).setColor(isAccept ? 0x2ecc71 : 0xe74c3c);
+
+          const disabledRow = new ActionRowBuilder().addComponents(
+            interaction.message.components[0].components.map(btn => ButtonBuilder.from(btn).setDisabled(true))
+          );
+          await interaction.update({ embeds: [originalEmbed], components: [disabledRow] });
+
+          if (isAccept) {
+            let target = null;
+            try {
+              target = await interaction.guild.members.fetch(requesterId);
+
+              if (reqType === 'leave') {
+                await safeRoleAction(interaction.guild, target, () => target.roles.add(LEAVE_ROLE_ID), LEAVE_ROLE_ID, 'رول الإجازة');
+                const durationField = originalEmbed.data.fields.find(f => f.name.includes('المدة'));
+                if (durationField) {
+                  const match = durationField.value.match(/\d+/);
+                  if (match) {
+                    const days = parseInt(match[0]);
+                    activeLeaves.set(requesterId, { endDate: Date.now() + days * 24*60*60*1000 });
+                    saveActiveLeaves();
+                  }
+                }
+              } else if (reqType === 'resign') {
+                await safeRoleAction(interaction.guild, target, () => target.roles.set([RESIGNATION_KEEP_ROLE_ID]), RESIGNATION_KEEP_ROLE_ID, 'رول الاستقالة');
+                try {
+                  await target.setNickname(null, 'تم قبول الاستقالة - حذف النيك نيم');
+                } catch (nickErr) {
+                  console.error('⚠️ فشل حذف النيك نيم:', nickErr);
+                }
+              } else if (reqType === 'break') {
+                if (target.roles.cache.has(LEAVE_ROLE_ID)) {
+                  await safeRoleAction(interaction.guild, target, () => target.roles.remove(LEAVE_ROLE_ID), LEAVE_ROLE_ID, 'رول الإجازة');
+                }
+                if (activeLeaves.has(requesterId)) {
+                  activeLeaves.delete(requesterId);
                   saveActiveLeaves();
                 }
               }
-            } else if (reqType === 'resign') {
-              await safeRoleAction(interaction.guild, target, () => target.roles.set([RESIGNATION_KEEP_ROLE_ID]), RESIGNATION_KEEP_ROLE_ID, 'رول الاستقالة');
-              try {
-                await target.setNickname(null, 'تم قبول الاستقالة - حذف النيك نيم');
-              } catch (nickErr) {
-                console.error('⚠️ فشل حذف النيك نيم:', nickErr);
-              }
-            } else if (reqType === 'break') {
-              if (target.roles.cache.has(LEAVE_ROLE_ID)) {
-                await safeRoleAction(interaction.guild, target, () => target.roles.remove(LEAVE_ROLE_ID), LEAVE_ROLE_ID, 'رول الإجازة');
-              }
-              if (activeLeaves.has(requesterId)) {
-                activeLeaves.delete(requesterId);
-                saveActiveLeaves();
-              }
+            } catch (e) {
+              console.error('⚠️ خطأ في تعديل الرتب:', e);
+              await interaction.followUp({
+                content: `⚠️ تم قبول الطلب لكن **تعديل الرتب فشل**:\n\`${e.message || 'صلاحيات البوت غير كافية.'}\`\nراجع صلاحية Manage Roles وترتيب رول البوت بإعدادات السيرفر > Roles.`,
+                ephemeral: true
+              }).catch(() => null);
             }
-          } catch (e) {
-            console.error('⚠️ خطأ في تعديل الرتب:', e);
-            await interaction.followUp({
-              content: `⚠️ تم قبول الطلب لكن **تعديل الرتب فشل**:\n\`${e.message || 'صلاحيات البوت غير كافية.'}\`\nراجع صلاحية Manage Roles وترتيب رول البوت بإعدادات السيرفر > Roles.`,
-              ephemeral: true
-            }).catch(() => null);
           }
-        }
 
-        try {
-          const user = await client.users.fetch(requesterId);
-          const typeLabels = { leave: 'إجازة', resign: 'استقالة', break: 'كسر إجازة' };
-          await user.send({
-            embeds: [
-              new EmbedBuilder()
-                .setTitle(isAccept ? '🎉 تم القبول' : '❌ تم الرفض')
-                .setColor(isAccept ? 0x2ecc71 : 0xe74c3c)
-                .setDescription(isAccept ? `تم قبول طلب ${typeLabels[reqType]}` : `تم رفض طلب ${typeLabels[reqType]}`)
-                .addFields({ name: 'المسؤول', value: `<@${interaction.user.id}>` })
-                .setTimestamp()
-            ]
-          });
-        } catch (e) { /* ignore */ }
+          try {
+            const user = await client.users.fetch(requesterId);
+            const typeLabels = { leave: 'إجازة', resign: 'استقالة', break: 'كسر إجازة' };
+            await user.send({
+              embeds: [
+                new EmbedBuilder()
+                  .setTitle(isAccept ? '🎉 تم القبول' : '❌ تم الرفض')
+                  .setColor(isAccept ? 0x2ecc71 : 0xe74c3c)
+                  .setDescription(isAccept ? `تم قبول طلب ${typeLabels[reqType]}` : `تم رفض طلب ${typeLabels[reqType]}`)
+                  .addFields({ name: 'المسؤول', value: `<@${interaction.user.id}>` })
+                  .setTimestamp()
+              ]
+            });
+          } catch (e) { /* ignore */ }
+          return;
+        }
+      } catch (buttonError) {
+        console.error('❌ خطأ في زر الإجازات:', buttonError);
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({ content: '❌ حدث خطأ أثناء فتح النافذة، حاول مرة أخرى.', ephemeral: true }).catch(() => {});
+        }
         return;
       }
     }
@@ -1510,11 +1522,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      // /leave_panel
+      // /leave_panel (معدل: تم إزالة إرفاق الصور لتجنب الأخطاء)
       if (interaction.commandName === 'leave_panel') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
         }
+
         const panelEmbed = new EmbedBuilder()
           .setTitle('📋 نظام طلبات الإجازات والاستقالات')
           .setDescription(
@@ -1524,22 +1537,26 @@ client.on(Events.InteractionCreate, async (interaction) => {
             `📝 **طلب استقالة**`
           )
           .setColor(LEAVE_PANEL_COLOR)
-          .setImage(`attachment://${LEAVE_BANNER_FILENAME}`)
           .setTimestamp();
+
+        // لا نرفق أي ملفات لتجنب أخطاء عدم وجود الملفات
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId('open_leave_modal').setLabel('طلب إجازة').setEmoji('📄').setStyle(ButtonStyle.Primary),
           new ButtonBuilder().setCustomId('open_break_modal').setLabel('كسر إجازة').setEmoji('🔓').setStyle(ButtonStyle.Secondary),
           new ButtonBuilder().setCustomId('open_resign_modal').setLabel('استقالة').setEmoji('📝').setStyle(ButtonStyle.Danger)
         );
 
-        const files = [];
-        if (fs.existsSync(LEAVE_BANNER_PATH)) {
-          files.push(new AttachmentBuilder(LEAVE_BANNER_PATH, { name: LEAVE_BANNER_FILENAME }));
+        try {
+          const channel = await interaction.guild.channels.fetch(LEAVE_EMBED_CHANNEL_ID);
+          if (!channel) {
+            return interaction.reply({ content: `❌ الروم <#${LEAVE_EMBED_CHANNEL_ID}> غير موجود.`, ephemeral: true });
+          }
+          await channel.send({ embeds: [panelEmbed], components: [row] });
+          return interaction.reply({ content: `✅ تم إرسال اللوحة إلى <#${LEAVE_EMBED_CHANNEL_ID}>.`, ephemeral: true });
+        } catch (err) {
+          console.error('❌ فشل إرسال لوحة الإجازات:', err);
+          return interaction.reply({ content: `❌ حدث خطأ أثناء إرسال اللوحة: ${err.message}`, ephemeral: true });
         }
-
-        const channel = await interaction.guild.channels.fetch(LEAVE_EMBED_CHANNEL_ID);
-        await channel.send({ embeds: [panelEmbed], components: [row], files });
-        return interaction.reply({ content: `✅ تم إرسال اللوحة إلى <#${LEAVE_EMBED_CHANNEL_ID}>.`, ephemeral: true });
       }
 
       // /active_leaves
@@ -2033,13 +2050,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
           hmFiles.push(new AttachmentBuilder(HM_BANNER_PATH, { name: HM_BANNER_FILENAME }));
           hmEmbed.setImage(`attachment://${HM_BANNER_FILENAME}`);
         } else {
-          console.error(`⚠️ ملف البنر غير موجود: ${HM_BANNER_PATH}`);
+          console.warn(`⚠️ ملف البنر غير موجود: ${HM_BANNER_PATH}`);
         }
         if (fs.existsSync(SERVER_LOGO_PATH)) {
           hmFiles.push(new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME }));
           hmEmbed.setThumbnail(`attachment://${SERVER_LOGO_FILENAME}`);
         } else {
-          console.error(`⚠️ ملف اللوقو غير موجود: ${SERVER_LOGO_PATH}`);
+          console.warn(`⚠️ ملف اللوقو غير موجود: ${SERVER_LOGO_PATH}`);
         }
 
         try {
@@ -2151,7 +2168,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       // ===== أوامر التفعيل الجديدة: /مفتوح و /مغلق =====
       if (interaction.commandName === 'مفتوح') {
-        // التحقق من الصلاحية (الرتب المسموحة)
         const allowedRoleIds = ['1486588170282733700', '1524667894711980173'];
         const memberRoles = interaction.member.roles.cache.map(r => r.id);
         const hasPermission = allowedRoleIds.some(roleId => memberRoles.includes(roleId));
@@ -2181,7 +2197,6 @@ https://discord.com/channels/1403099156016533557/1483285123008041031
       }
 
       if (interaction.commandName === 'مغلق') {
-        // التحقق من الصلاحية
         const allowedRoleIds = ['1486588170282733700', '1524667894711980173'];
         const memberRoles = interaction.member.roles.cache.map(r => r.id);
         const hasPermission = allowedRoleIds.some(roleId => memberRoles.includes(roleId));
