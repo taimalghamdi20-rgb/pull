@@ -196,7 +196,7 @@ const ROLE_ORDER = [
   '1472332996269838490',
   '1472333499221544981',
   '1472333861965791374',
-  '1472342890058354801', // تم إضافتها
+  '1472342890058354801',
   '1539598264708505620',
   '1539598177370509462',
   '1539598187986165811',
@@ -1633,7 +1633,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [new EmbedBuilder().setTitle('📋 الإجازات النشطة').setColor(0x3ba55d).setDescription(desc)] });
       }
 
-      // ===== الأمر المدمج /barren (مع التعديلات الجديدة) =====
+      // ===== الأمر المدمج /barren =====
       if (interaction.commandName === 'barren') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
@@ -1708,7 +1708,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         // =====================================================
-        // 3. جلب عدد المساعدات (الدن) - طريقة جديدة: عدد رسائل العضو في القناة DONE_CHANNEL_ID
+        // 3. جلب عدد المساعدات (الدن) - عدد رسائل العضو في القناة DONE_CHANNEL_ID
         // =====================================================
         const doneChannel = guild.channels.cache.get(DONE_CHANNEL_ID);
         const doneMap = new Map();
@@ -1716,8 +1716,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         for (const userId of userIds) doneMap.set(userId, 0);
 
         if (doneChannel) {
-          // جلب جميع رسائل القناة من أقدم تاريخ ممكن (oldestCutoff)
-          const allDoneMessages = await fetchMessagesFromDate(DONE_CHANNEL_ID, oldestCutoff);
+          // استخدام fetchAllMessages لجلب جميع الرسائل الممكنة (حتى 5000) دون فلترة تاريخية
+          const allDoneMessages = await fetchAllMessages(DONE_CHANNEL_ID);
           for (const msg of allDoneMessages) {
             const userId = msg.author.id;
             if (doneMap.has(userId)) {
@@ -1797,7 +1797,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             avgRating,
             ratingCount,
             lastPromotion,
-            isPromotionBased // لتحديد نوع العرض لاحقاً
+            isPromotionBased
           });
         }
 
@@ -1872,7 +1872,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             bodyText += `▪️ **عدد ساعات الشخص:** ${formatSecondsToHoursText(s.totalHours)}\n`;
             bodyText += `▪️ **الدن :** ${s.doneCount}\n`;
             bodyText += `▪️ **التقييمات :** ${avgRatingStr} / 5 ${stars} (${s.ratingCount} تقييم)\n`;
-            // إذا كانت المجموعة من نوع 'promotion' نضيف تاريخ الترقية
             if (group.type === 'promotion') {
               const promotionTimestamp = s.lastPromotion;
               if (promotionTimestamp) {
