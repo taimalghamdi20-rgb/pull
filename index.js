@@ -187,7 +187,7 @@ const REACTIVATION_CHANNEL_ID = '1493565275428225125';
 const HOURS_CHANNEL_IDS = ['1513220016718217228', '1513231005815931000'];
 const DONE_CHANNEL_ID = '1529933848144510976';
 
-// ترتيب الرتب (من الأعلى إلى الأسفل)
+// ترتيب الرتب (من الأعلى إلى الأسفل) - تم تحديثه
 const ROLE_ORDER = [
   '1499162553245499432',
   '1539600368919515207',
@@ -196,6 +196,7 @@ const ROLE_ORDER = [
   '1472332996269838490',
   '1472333499221544981',
   '1472333861965791374',
+  '1472342890058354801', // تم إضافتها
   '1539598264708505620',
   '1539598177370509462',
   '1539598187986165811',
@@ -209,7 +210,7 @@ const ROLE_ORDER = [
 ];
 
 // الرتب التي تعتمد على آخر ترقية (الخمس الأخيرة في ROLE_ORDER)
-const PROMOTION_BASED_ROLES = ROLE_ORDER.slice(-5); // آخر 5 عناصر
+const PROMOTION_BASED_ROLES = ROLE_ORDER.slice(-5);
 
 // ===== دوال مساعدة للجرد =====
 async function getLatestMessagePerUser(channel, userIds) {
@@ -357,6 +358,32 @@ function ratingLabel(rating) {
 // ============================================================
 // دوال جلب الإحصائيات (لأمر barren)
 // ============================================================
+// دالة لجلب جميع الرسائل من قناة (بدون فلترة زمنية) ولكن بحد أقصى 5000
+async function fetchAllMessages(channelId) {
+  try {
+    const channel = client.channels.cache.get(channelId);
+    if (!channel) return [];
+    const messages = [];
+    let lastId = null;
+    let fetched = 0;
+    const limit = 5000;
+    while (fetched < limit) {
+      const options = { limit: 100 };
+      if (lastId) options.before = lastId;
+      const msgs = await channel.messages.fetch(options);
+      if (msgs.size === 0) break;
+      messages.push(...msgs.values());
+      lastId = msgs.last().id;
+      fetched += msgs.size;
+      if (msgs.size < 100) break;
+    }
+    return messages;
+  } catch (err) {
+    console.error(`❌ فشل جلب رسائل القناة ${channelId}:`, err);
+    return [];
+  }
+}
+
 async function fetchMessagesFromDate(channelId, fromDate) {
   try {
     const channel = client.channels.cache.get(channelId);
@@ -1606,7 +1633,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [new EmbedBuilder().setTitle('📋 الإجازات النشطة').setColor(0x3ba55d).setDescription(desc)] });
       }
 
-      // ===== الأمر المدمج /barren =====
+      // ===== الأمر المدمج /barren (مع التعديلات الجديدة) =====
       if (interaction.commandName === 'barren') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
@@ -1629,24 +1656,43 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         const userIds = [...members.keys()];
-        const cutoffDate = Date.now() - 7 * 24 * 60 * 60 * 1000;
 
-        // 1. جلب رسائل التفعيل والرفض وإعادة التفعيل (لجميع الأعضاء)
+        // جلب تاريخ آخر ترقية لكل عضو
+        const promotionDateMap = await getLastPromotionDate(guild);
+
+        // تحديد أقدم تاريخ بين جميع الأعضاء (سنستخدمه كحد أدنى لجلب الرسائل)
+        let oldestCutoff = Date.now();
+        for (const userId of userIds) {
+          const promoDate = promotionDateMap.get(userId);
+          if (promoDate && promoDate < oldestCutoff) {
+            oldestCutoff = promoDate;
+          }
+        }
+        // إذا لم يكن لأي عضو ترقية، نستخدم آخر 7 أيام
+        if (oldestCutoff === Date.now()) {
+          oldestCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+        }
+
+        // جلب جميع الرسائل من القنوات المطلوبة (بدون فلترة زمنية، لكننا سنستخدم oldestCutoff لجلب أقل قدر ممكن)
+        // لكننا سنستخدم fetchMessagesFromDate مع oldestCutoff لجلب الرسائل من أقدم تاريخ مطلوب.
         const [activationMsgs, rejectionMsgs, reactivationMsgs] = await Promise.all([
-          fetchMessagesFromDate(ACTIVATION_CHANNEL_ID, cutoffDate),
-          fetchMessagesFromDate(REJECTION_CHANNEL_ID, cutoffDate),
-          fetchMessagesFromDate(REACTIVATION_CHANNEL_ID, cutoffDate)
+          fetchMessagesFromDate(ACTIVATION_CHANNEL_ID, oldestCutoff),
+          fetchMessagesFromDate(REJECTION_CHANNEL_ID, oldestCutoff),
+          fetchMessagesFromDate(REACTIVATION_CHANNEL_ID, oldestCutoff)
         ]);
 
-        const countMentions = (msgs, userId) => {
+        // دالة لحساب عدد مرات منشن عضو في قائمة رسائل مع فلترة زمنية خاصة
+        const countMentionsWithCutoff = (msgs, userId, cutoffDate) => {
           let count = 0;
           for (const msg of msgs) {
-            if (msg.content.includes(`<@${userId}>`)) count++;
+            if (msg.createdTimestamp >= cutoffDate && msg.content.includes(`<@${userId}>`)) {
+              count++;
+            }
           }
           return count;
         };
 
-        // 2. جلب الساعات من الرومين
+        // 2. جلب الساعات من الرومين (هذه لا تعتمد على التاريخ، بل على أحدث إمبيد)
         const hoursMap = new Map();
         for (const channelId of HOURS_CHANNEL_IDS) {
           const channel = guild.channels.cache.get(channelId);
@@ -1661,7 +1707,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }
         }
 
-        // 3. جلب عدد المساعدات (الدن)
+        // 3. جلب عدد المساعدات (الدن) - هذه أيضاً لا تعتمد على التاريخ، بل على أحدث رسالة
         const doneChannel = guild.channels.cache.get(DONE_CHANNEL_ID);
         const doneMap = new Map();
         if (doneChannel) {
@@ -1684,15 +1730,35 @@ client.on(Events.InteractionCreate, async (interaction) => {
           ratingsData = await getAdminRatings(ratingsChannel);
         }
 
-        // 5. جلب تاريخ آخر ترقية لكل عضو (لجميع الأعضاء، سنستخدمه للرتب المعتمدة على الترقية)
-        const promotionDateMap = await getLastPromotionDate(guild);
-
-        // تجميع الإحصائيات الأساسية (التفعيل، الرفض، إعادة التفعيل، الساعات، الدن، التقييم)
+        // تجميع الإحصائيات لكل عضو بناءً على نوع الرتبة
         const stats = new Map();
         for (const userId of userIds) {
-          const activationCount = countMentions(activationMsgs, userId);
-          const rejectionCount = countMentions(rejectionMsgs, userId);
-          const reactivationCount = countMentions(reactivationMsgs, userId);
+          // تحديد الـ cutoff لهذا العضو: إذا كان في الرتب المعتمدة على الترقية، نستخدم تاريخ ترقيته، وإلا نستخدم آخر 7 أيام
+          let cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000; // القيمة الافتراضية
+          // نتحقق مما إذا كان العضو يمتلك أي رتبة من PROMOTION_BASED_ROLES
+          const member = members.get(userId);
+          let isPromotionBased = false;
+          if (member) {
+            for (const roleId of PROMOTION_BASED_ROLES) {
+              if (member.roles.cache.has(roleId)) {
+                isPromotionBased = true;
+                break;
+              }
+            }
+          }
+          if (isPromotionBased) {
+            const promoDate = promotionDateMap.get(userId);
+            if (promoDate) {
+              cutoff = promoDate;
+            } else {
+              // إذا لم يكن له ترقية، نستخدم آخر 7 أيام أيضاً
+              cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+            }
+          }
+
+          const activationCount = countMentionsWithCutoff(activationMsgs, userId, cutoff);
+          const rejectionCount = countMentionsWithCutoff(rejectionMsgs, userId, cutoff);
+          const reactivationCount = countMentionsWithCutoff(reactivationMsgs, userId, cutoff);
           const totalHours = hoursMap.get(userId) || 0;
           const doneCount = doneMap.get(userId) || 0;
           const ratingInfo = ratingsData.get(userId);
@@ -1708,7 +1774,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
             doneCount,
             avgRating,
             ratingCount,
-            lastPromotion
+            lastPromotion,
+            isPromotionBased // لتحديد نوع العرض لاحقاً
           });
         }
 
@@ -1716,7 +1783,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const assignedIds = new Set();
         const grouped = [];
 
-        // 1. الرتب التي تعتمد على التفعيلات (جميع الرتب ما عدا الرتب الخمس الأخيرة)
+        // 1. الرتب العادية (غير المعتمدة على الترقية)
         const normalRoles = ROLE_ORDER.filter(roleId => !PROMOTION_BASED_ROLES.includes(roleId));
         for (const roleId of normalRoles) {
           const roleObj = guild.roles.cache.get(roleId);
@@ -1734,7 +1801,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           grouped.push({ roleId, roleObj, entries, type: 'normal' });
         }
 
-        // 2. الرتب التي تعتمد على آخر ترقية (الخمس الأخيرة)
+        // 2. الرتب المعتمدة على الترقية
         for (const roleId of PROMOTION_BASED_ROLES) {
           const roleObj = guild.roles.cache.get(roleId);
           const entries = [];
@@ -1777,9 +1844,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
             const avgRatingStr = s.avgRating ? s.avgRating.toFixed(1) : '0.0';
             const stars = s.avgRating ? ratingStarsBar(Math.round(s.avgRating)) : '☆☆☆☆☆';
             bodyText += `▪️ **الاسم:** <@${entry.userId}>\n`;
-            bodyText += `▪️ **تفعيل شخص (آخر 7 أيام):** ${s.activationCount}\n`;
-            bodyText += `▪️ **رفض شخص (آخر 7 أيام):** ${s.rejectionCount}\n`;
-            bodyText += `▪️ **إعادة تفعيل شخص (آخر 7 أيام):** ${s.reactivationCount}\n`;
+            bodyText += `▪️ **تفعيل شخص (آخر 7 أيام أو منذ آخر ترقية):** ${s.activationCount}\n`;
+            bodyText += `▪️ **رفض شخص (آخر 7 أيام أو منذ آخر ترقية):** ${s.rejectionCount}\n`;
+            bodyText += `▪️ **إعادة تفعيل شخص (آخر 7 أيام أو منذ آخر ترقية):** ${s.reactivationCount}\n`;
             bodyText += `▪️ **عدد ساعات الشخص:** ${formatSecondsToHoursText(s.totalHours)}\n`;
             bodyText += `▪️ **الدن :** ${s.doneCount}\n`;
             bodyText += `▪️ **التقييمات :** ${avgRatingStr} / 5 ${stars} (${s.ratingCount} تقييم)\n`;
@@ -1797,7 +1864,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }
         }
 
-        const header = `📊 جرد شامل (آخر 7 أيام)\n\n`;
+        const header = `📊 جرد شامل (آخر 7 أيام للرتب العادية، ومنذ آخر ترقية للرتب المحددة)\n\n`;
         const footer = `\n**تم جرد ${totalCount} شخص.**`;
 
         const files = [];
