@@ -996,8 +996,8 @@ client.once(Events.ClientReady, async (c) => {
 
   const commands = [
     { name: 'leave_panel', description: 'لوحة طلبات الإجازات والاستقالات' },
-    { name: 'active_leaves', description: 'عرض الإداريين المأجزين' },
-    { name: 'barren', description: 'جرد شامل لفريق التفعيل والرقابة (آخر 7 أيام)' },
+    { name: 'active_leaves', description: 'عرض الإداريين المأجزيين' },
+    { name: 'barren', description: 'جرد شامل لفريقي التفعيل والرقابة (آخر 7 أيام)' },
     { name: 'privacy', description: 'سياسة الخصوصية' },
     { name: 'hm_panel', description: 'لوحة تسجيل الدخول/الخروج للإدارة' },
     { name: 'restart', description: 'إعادة تشغيل البوت' },
@@ -1018,16 +1018,11 @@ client.once(Events.ClientReady, async (c) => {
   ];
 
   try {
-    await c.application.commands.set(commands);
-    console.log('✅ تم تسجيل الأوامر (عالمية).');
+    // تسجيل الأوامر في السيرفر فقط (لتجنب التكرار)
+    await c.application.commands.set(commands, GUILD_ID);
+    console.log('✅ تم تسجيل الأوامر في السيرفر بنجاح.');
   } catch (error) {
-    console.error('❌ فشل تسجيل الأوامر العالمية:', error);
-    try {
-      await c.application.commands.set(commands, GUILD_ID);
-      console.log('✅ تم تسجيل الأوامر في السيرفر (كحل احتياطي).');
-    } catch (err2) {
-      console.error('❌ فشل تسجيل الأوامر في السيرفر أيضاً:', err2);
-    }
+    console.error('❌ فشل تسجيل الأوامر في السيرفر:', error);
   }
 });
 
