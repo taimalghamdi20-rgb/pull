@@ -358,24 +358,31 @@ function ratingLabel(rating) {
 // ============================================================
 // دوال جلب الإحصائيات (لأمر barren)
 // ============================================================
-// دالة لجلب جميع الرسائل من قناة (بدون فلترة زمنية) ولكن بحد أقصى 5000
-async function fetchAllMessages(channelId) {
+// دالة لجلب الرسائل من قناة مع فلترة زمنية (تتوقف عند الوصول لأقدم من cutoff)
+async function fetchMessagesUpToCutoff(channelId, cutoffDate) {
   try {
     const channel = client.channels.cache.get(channelId);
     if (!channel) return [];
     const messages = [];
     let lastId = null;
     let fetched = 0;
-    const limit = 5000;
-    while (fetched < limit) {
+    // نستخدم while(true) ونتوقف عندما نصل إلى رسائل أقدم من cutoffDate
+    while (true) {
       const options = { limit: 100 };
       if (lastId) options.before = lastId;
       const msgs = await channel.messages.fetch(options);
       if (msgs.size === 0) break;
-      messages.push(...msgs.values());
+      // تصفية الرسائل الأقدم من cutoffDate (لا نضيفها)
+      const filtered = msgs.filter(m => m.createdTimestamp >= cutoffDate);
+      messages.push(...filtered.values());
+      // إذا كانت آخر رسالة في المجموعة أقدم من cutoffDate، نتوقف
+      // (لأننا نعلم أن جميع الرسائل الأقدم لن تكون مطلوبة)
+      if (msgs.last().createdTimestamp < cutoffDate) break;
       lastId = msgs.last().id;
       fetched += msgs.size;
       if (msgs.size < 100) break;
+      // تأخير 200ms لتجنب Rate Limit
+      await new Promise(resolve => setTimeout(resolve, 200));
     }
     return messages;
   } catch (err) {
@@ -384,6 +391,7 @@ async function fetchAllMessages(channelId) {
   }
 }
 
+// دالة قديمة للجلب من تاريخ محدد (تُستخدم للتفعيل والرفض وإعادة التفعيل)
 async function fetchMessagesFromDate(channelId, fromDate) {
   try {
     const channel = client.channels.cache.get(channelId);
@@ -1708,20 +1716,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         // =====================================================
-        // 3. جلب عدد المساعدات (الدن) - عدد رسائل العضو في القناة DONE_CHANNEL_ID
+        // 3. جلب عدد المساعدات (الدن) - باستخدام الدالة الجديدة التي تجلب حتى آخر رسالة مطلوبة
         // =====================================================
         const doneChannel = guild.channels.cache.get(DONE_CHANNEL_ID);
         const doneMap = new Map();
-        // تهيئة جميع المستخدمين بـ 0
         for (const userId of userIds) doneMap.set(userId, 0);
 
         if (doneChannel) {
-          // استخدام fetchAllMessages لجلب جميع الرسائل الممكنة (حتى 5000) دون فلترة تاريخية
-          const allDoneMessages = await fetchAllMessages(DONE_CHANNEL_ID);
+          // نستخدم fetchMessagesUpToCutoff لجلب جميع الرسائل من تاريخ القطع (oldestCutoff) حتى الآن
+          const allDoneMessages = await fetchMessagesUpToCutoff(DONE_CHANNEL_ID, oldestCutoff);
           for (const msg of allDoneMessages) {
             const userId = msg.author.id;
             if (doneMap.has(userId)) {
-              // تحديد القطع الزمني الخاص بهذا العضو (مثلما نفعل مع التفعيلات)
+              // تحديد القطع الزمني لهذا العضو (مثلما نفعل مع التفعيلات)
               let userCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000; // افتراضي
               const member = members.get(userId);
               let isPromotionBased = false;
@@ -1757,7 +1764,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         for (const userId of userIds) {
           // تحديد الـ cutoff لهذا العضو: إذا كان في الرتب المعتمدة على الترقية، نستخدم تاريخ ترقيته، وإلا نستخدم آخر 7 أيام
           let cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000; // القيمة الافتراضية
-          // نتحقق مما إذا كان العضو يمتلك أي رتبة من PROMOTION_BASED_ROLES
           const member = members.get(userId);
           let isPromotionBased = false;
           if (member) {
@@ -1770,12 +1776,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }
           if (isPromotionBased) {
             const promoDate = promotionDateMap.get(userId);
-            if (promoDate) {
-              cutoff = promoDate;
-            } else {
-              // إذا لم يكن له ترقية، نستخدم آخر 7 أيام أيضاً
-              cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
-            }
+            if (promoDate) cutoff = promoDate;
+            else cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
           }
 
           const activationCount = countMentionsWithCutoff(activationMsgs, userId, cutoff);
@@ -1866,19 +1868,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
             const avgRatingStr = s.avgRating ? s.avgRating.toFixed(1) : '0.0';
             const stars = s.avgRating ? ratingStarsBar(Math.round(s.avgRating)) : '☆☆☆☆☆';
             bodyText += `▪️ **الاسم:** <@${entry.userId}>\n`;
-            bodyText += `▪️ **تفعيل شخص (آخر 7 أيام أو منذ آخر ترقية):** ${s.activationCount}\n`;
-            bodyText += `▪️ **رفض شخص (آخر 7 أيام أو منذ آخر ترقية):** ${s.rejectionCount}\n`;
-            bodyText += `▪️ **إعادة تفعيل شخص (آخر 7 أيام أو منذ آخر ترقية):** ${s.reactivationCount}\n`;
+            bodyText += `▪️ **تفعيل شخص:** ${s.activationCount}\n`;
+            bodyText += `▪️ **رفض شخص:** ${s.rejectionCount}\n`;
+            bodyText += `▪️ **إعادة تفعيل:** ${s.reactivationCount}\n`;
             bodyText += `▪️ **عدد ساعات الشخص:** ${formatSecondsToHoursText(s.totalHours)}\n`;
             bodyText += `▪️ **الدن :** ${s.doneCount}\n`;
             bodyText += `▪️ **التقييمات :** ${avgRatingStr} / 5 ${stars} (${s.ratingCount} تقييم)\n`;
             if (group.type === 'promotion') {
               const promotionTimestamp = s.lastPromotion;
-              if (promotionTimestamp) {
-                bodyText += `▪️ **تاريخ آخر ترقية:** <t:${Math.floor(promotionTimestamp / 1000)}:F>\n`;
-              } else {
-                bodyText += `▪️ **تاريخ آخر ترقية:** لا يوجد\n`;
-              }
+              bodyText += `▪️ **تاريخ آخر ترقية:** ${promotionTimestamp ? `<t:${Math.floor(promotionTimestamp / 1000)}:F>` : 'لا يوجد'}\n`;
             }
             bodyText += '\n';
             totalCount++;
