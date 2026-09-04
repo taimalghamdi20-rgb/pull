@@ -187,6 +187,7 @@ const REACTIVATION_CHANNEL_ID = '1493565275428225125';
 const HOURS_CHANNEL_IDS = ['1513220016718217228', '1513231005815931000'];
 const DONE_CHANNEL_ID = '1529933848144510976';
 
+// ترتيب الرتب (من الأعلى إلى الأسفل)
 const ROLE_ORDER = [
   '1499162553245499432',
   '1539600368919515207',
@@ -206,6 +207,9 @@ const ROLE_ORDER = [
   '1472352421153083563',
   '1459304436491882742'
 ];
+
+// الرتب التي تعتمد على آخر ترقية (الخمس الأخيرة في ROLE_ORDER)
+const PROMOTION_BASED_ROLES = ROLE_ORDER.slice(-5); // آخر 5 عناصر
 
 // ===== دوال مساعدة للجرد =====
 async function getLatestMessagePerUser(channel, userIds) {
@@ -1312,7 +1316,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    // ===== باقي الأزرار (الإجازات) - تم إضافة try/catch حول كل زر =====
+    // ===== باقي الأزرار (الإجازات) =====
     if (interaction.isButton()) {
       try {
         // زر طلب إجازة
@@ -1604,7 +1608,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       // ===== الأمر المدمج /barren =====
       if (interaction.commandName === 'barren') {
-        // التحقق من الصلاحية (يمكن تعديلها حسب الرغبة)
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
         }
@@ -1628,7 +1631,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const userIds = [...members.keys()];
         const cutoffDate = Date.now() - 7 * 24 * 60 * 60 * 1000;
 
-        // 1. جلب رسائل التفعيل والرفض وإعادة التفعيل
+        // 1. جلب رسائل التفعيل والرفض وإعادة التفعيل (لجميع الأعضاء)
         const [activationMsgs, rejectionMsgs, reactivationMsgs] = await Promise.all([
           fetchMessagesFromDate(ACTIVATION_CHANNEL_ID, cutoffDate),
           fetchMessagesFromDate(REJECTION_CHANNEL_ID, cutoffDate),
@@ -1681,7 +1684,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
           ratingsData = await getAdminRatings(ratingsChannel);
         }
 
-        // تجميع الإحصائيات
+        // 5. جلب تاريخ آخر ترقية لكل عضو (لجميع الأعضاء، سنستخدمه للرتب المعتمدة على الترقية)
+        const promotionDateMap = await getLastPromotionDate(guild);
+
+        // تجميع الإحصائيات الأساسية (التفعيل، الرفض، إعادة التفعيل، الساعات، الدن، التقييم)
         const stats = new Map();
         for (const userId of userIds) {
           const activationCount = countMentions(activationMsgs, userId);
@@ -1692,6 +1698,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const ratingInfo = ratingsData.get(userId);
           const avgRating = ratingInfo ? ratingInfo.average : 0;
           const ratingCount = ratingInfo ? ratingInfo.count : 0;
+          const lastPromotion = promotionDateMap.get(userId) || null;
 
           stats.set(userId, {
             activationCount,
@@ -1700,14 +1707,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
             totalHours,
             doneCount,
             avgRating,
-            ratingCount
+            ratingCount,
+            lastPromotion
           });
         }
 
         // تجميع الأعضاء حسب ترتيب الرتب
         const assignedIds = new Set();
         const grouped = [];
-        for (const roleId of ROLE_ORDER) {
+
+        // 1. الرتب التي تعتمد على التفعيلات (جميع الرتب ما عدا الرتب الخمس الأخيرة)
+        const normalRoles = ROLE_ORDER.filter(roleId => !PROMOTION_BASED_ROLES.includes(roleId));
+        for (const roleId of normalRoles) {
           const roleObj = guild.roles.cache.get(roleId);
           const entries = [];
           for (const userId of userIds) {
@@ -1718,8 +1729,26 @@ client.on(Events.InteractionCreate, async (interaction) => {
               assignedIds.add(userId);
             }
           }
+          // ترتيب حسب عدد التفعيلات ثم الساعات
           entries.sort((a, b) => b.stats.activationCount - a.stats.activationCount || b.stats.totalHours - a.stats.totalHours);
-          grouped.push({ roleId, roleObj, entries });
+          grouped.push({ roleId, roleObj, entries, type: 'normal' });
+        }
+
+        // 2. الرتب التي تعتمد على آخر ترقية (الخمس الأخيرة)
+        for (const roleId of PROMOTION_BASED_ROLES) {
+          const roleObj = guild.roles.cache.get(roleId);
+          const entries = [];
+          for (const userId of userIds) {
+            if (assignedIds.has(userId)) continue;
+            const member = members.get(userId);
+            if (member && member.roles.cache.has(roleId)) {
+              entries.push({ userId, member, stats: stats.get(userId) });
+              assignedIds.add(userId);
+            }
+          }
+          // ترتيب حسب تاريخ آخر ترقية (الأحدث أولاً)
+          entries.sort((a, b) => (b.stats.lastPromotion || 0) - (a.stats.lastPromotion || 0));
+          grouped.push({ roleId, roleObj, entries, type: 'promotion' });
         }
 
         // الأعضاء الذين ليس لديهم أي رتبة من القائمة
@@ -1731,7 +1760,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }
         }
         noRoleEntries.sort((a, b) => b.stats.activationCount - a.stats.activationCount || b.stats.totalHours - a.stats.totalHours);
-        grouped.push({ roleId: null, roleObj: null, entries: noRoleEntries });
+        grouped.push({ roleId: null, roleObj: null, entries: noRoleEntries, type: 'normal' });
 
         // بناء النص
         let bodyText = '';
@@ -1753,7 +1782,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
             bodyText += `▪️ **إعادة تفعيل شخص (آخر 7 أيام):** ${s.reactivationCount}\n`;
             bodyText += `▪️ **عدد ساعات الشخص:** ${formatSecondsToHoursText(s.totalHours)}\n`;
             bodyText += `▪️ **الدن :** ${s.doneCount}\n`;
-            bodyText += `▪️ **التقييمات :** ${avgRatingStr} / 5 ${stars} (${s.ratingCount} تقييم)\n\n`;
+            bodyText += `▪️ **التقييمات :** ${avgRatingStr} / 5 ${stars} (${s.ratingCount} تقييم)\n`;
+            // إذا كانت المجموعة من نوع 'promotion' نضيف تاريخ الترقية
+            if (group.type === 'promotion') {
+              const promotionTimestamp = s.lastPromotion;
+              if (promotionTimestamp) {
+                bodyText += `▪️ **تاريخ آخر ترقية:** <t:${Math.floor(promotionTimestamp / 1000)}:F>\n`;
+              } else {
+                bodyText += `▪️ **تاريخ آخر ترقية:** لا يوجد\n`;
+              }
+            }
+            bodyText += '\n';
             totalCount++;
           }
         }
