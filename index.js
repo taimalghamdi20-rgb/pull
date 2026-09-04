@@ -179,58 +179,92 @@ const HM_AUTO_OUT_TIMEOUT_MS = 60 * 1000;
 const hmCheckedIn = new Map();
 const hmLeaveTimers = new Map();
 
-const ALLOWED_ROLE_IDS = [
+// ===== إعدادات الجرد المدمج =====
+const INVENTORY_TARGET_ROLE_ID = '1459304465458008196';
+const ACTIVATION_CHANNEL_ID = '1484859915200626829';
+const REJECTION_CHANNEL_ID = '1484865429158756494';
+const REACTIVATION_CHANNEL_ID = '1493565275428225125';
+const HOURS_CHANNEL_IDS = ['1513220016718217228', '1513231005815931000'];
+const DONE_CHANNEL_ID = '1529933848144510976';
+
+const ROLE_ORDER = [
   '1499162553245499432',
+  '1539600368919515207',
+  '1539600481490313346',
   '1480102405931667467',
   '1472332996269838490',
   '1472333499221544981',
   '1472333861965791374',
-  '1472342890058354801',
+  '1539598264708505620',
+  '1539598177370509462',
+  '1539598187986165811',
   '1480102742851850302',
+  '1539601944652550144',
+  '1539601925979508806',
   '1472353378695778537',
   '1459304443844497633',
   '1472352421153083563',
   '1459304436491882742'
 ];
 
-const CENSORSHIP_REPORT_CHANNEL_ID = '1459304931013033994';
-const ACTIVATION_REPORT_CHANNEL_ID = '1480766793248276581';
-const HIGH_STAFF_REPORT_CHANNEL_ID = '1459304917532414052';
+// ===== دوال مساعدة للجرد =====
+async function getLatestMessagePerUser(channel, userIds) {
+  const result = new Map();
+  let lastId = null;
+  let fetched = 0;
+  const limit = 1000;
+  const remaining = new Set(userIds);
+  while (fetched < limit && remaining.size > 0) {
+    const options = { limit: 100 };
+    if (lastId) options.before = lastId;
+    const msgs = await channel.messages.fetch(options);
+    if (msgs.size === 0) break;
+    for (const [, msg] of msgs) {
+      if (remaining.has(msg.author.id) && !result.has(msg.author.id)) {
+        result.set(msg.author.id, msg);
+        remaining.delete(msg.author.id);
+      }
+    }
+    lastId = msgs.last().id;
+    fetched += msgs.size;
+    if (msgs.size < 100) break;
+  }
+  return result;
+}
 
-const CENSORSHIP_VOICE_CHANNELS = [
-  '1499105265272754246',
-  '1499105221383819497',
-  '1499105170716491806',
-  '1525972362246226041',
-  '1499105092933128212',
-  '1499084679083720805',
-  '1499352796435058848',
-  '1499352980120403989',
-  '1499353050907938916',
-  '1533115980241305860',
-  '1535799453418782800',
-  '1535799489837670520',
-  '1535799510016589904'
-];
-
-const ACTIVATION_VOICE_CHANNELS = [
-  '1483283170265665566',
-  '1483283249416638514',
-  '1483283321789222933',
-  '1483283430379618424',
-  '1483283498419884145',
-  '1493989690766921768',
-  '1499168095561056366',
-  '1499168130910388244',
-  '1499460308262060032',
-  '1499460333214109957'
-];
-
-const HIGH_STAFF_VOICE_CHANNELS = [];
-
-const CENSORSHIP_TEAM_ROLE_ID = '1499102575918579793';
-const CENSORSHIP_ACTIVITY_CHANNEL_ID = '1529933848144510976';
-const CENSORSHIP_BAN_CHANNEL_ID = '1459305185808617594';
+async function getLatestEmbedFieldPerUser(channel, userIds, fieldName) {
+  const result = new Map();
+  let lastId = null;
+  let fetched = 0;
+  const limit = 1000;
+  const remaining = new Set(userIds);
+  while (fetched < limit && remaining.size > 0) {
+    const options = { limit: 100 };
+    if (lastId) options.before = lastId;
+    const msgs = await channel.messages.fetch(options);
+    if (msgs.size === 0) break;
+    for (const [, msg] of msgs) {
+      if (remaining.has(msg.author.id) && !result.has(msg.author.id)) {
+        if (msg.embeds && msg.embeds.length > 0) {
+          for (const embed of msg.embeds) {
+            if (embed.fields) {
+              const field = embed.fields.find(f => f.name && f.name.includes(fieldName));
+              if (field) {
+                result.set(msg.author.id, field.value);
+                remaining.delete(msg.author.id);
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+    lastId = msgs.last().id;
+    fetched += msgs.size;
+    if (msgs.size < 100) break;
+  }
+  return result;
+}
 
 // ============================================================
 // دوال مساعدة رئيسية (الإجازات، الجرد، إلخ)
@@ -521,7 +555,7 @@ async function getTotalHoursMap(guild, targetIds) {
 }
 
 // ============================================================
-// دوال مساعدة لجرد فريق الرقابة
+// دوال مساعدة لجرد فريق الرقابة (تم دمجها في الجرد الجديد)
 // ============================================================
 
 /**
@@ -963,8 +997,7 @@ client.once(Events.ClientReady, async (c) => {
   const commands = [
     { name: 'leave_panel', description: 'لوحة طلبات الإجازات والاستقالات' },
     { name: 'active_leaves', description: 'عرض الإداريين المأجزين' },
-    { name: 'barren', description: 'جرد فريق التفعيل (آخر 7 أيام)' },
-    { name: 'barren_censorship', description: 'جرد فريق الرقابة (آخر 7 أيام)' },
+    { name: 'barren', description: 'جرد شامل لفريق التفعيل والرقابة (آخر 7 أيام)' },
     { name: 'privacy', description: 'سياسة الخصوصية' },
     { name: 'hm_panel', description: 'لوحة تسجيل الدخول/الخروج للإدارة' },
     { name: 'restart', description: 'إعادة تشغيل البوت' },
@@ -985,12 +1018,10 @@ client.once(Events.ClientReady, async (c) => {
   ];
 
   try {
-    // تسجيل الأوامر عالمياً (بدون GUILD_ID) لتجنب Missing Access
     await c.application.commands.set(commands);
     console.log('✅ تم تسجيل الأوامر (عالمية).');
   } catch (error) {
     console.error('❌ فشل تسجيل الأوامر العالمية:', error);
-    // محاولة تسجيلها في السيرفر المحدد كحل بديل
     try {
       await c.application.commands.set(commands, GUILD_ID);
       console.log('✅ تم تسجيل الأوامر في السيرفر (كحل احتياطي).');
@@ -1522,7 +1553,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      // /leave_panel (معدل: تم إزالة إرفاق الصور لتجنب الأخطاء)
+      // /leave_panel
       if (interaction.commandName === 'leave_panel') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
@@ -1539,7 +1570,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setColor(LEAVE_PANEL_COLOR)
           .setTimestamp();
 
-        // لا نرفق أي ملفات لتجنب أخطاء عدم وجود الملفات
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId('open_leave_modal').setLabel('طلب إجازة').setEmoji('📄').setStyle(ButtonStyle.Primary),
           new ButtonBuilder().setCustomId('open_break_modal').setLabel('كسر إجازة').setEmoji('🔓').setStyle(ButtonStyle.Secondary),
@@ -1577,384 +1607,176 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ embeds: [new EmbedBuilder().setTitle('📋 الإجازات النشطة').setColor(0x3ba55d).setDescription(desc)] });
       }
 
-      // ===== أمر جرد فريق التفعيل =====
+      // ===== الأمر المدمج /barren =====
       if (interaction.commandName === 'barren') {
-        if (!hasBarrenRole(interaction.member)) {
-          return interaction.reply({ 
-            content: '❌ هذا الأمر مخصص لأعضاء رتبة محددة فقط.', 
-            ephemeral: true 
-          });
-        }
-
-        await interaction.deferReply();
-
-        const guild = interaction.guild;
-        
-        console.log('==================== بدء جرد فريق التفعيل (آخر 7 أيام) ====================');
-        console.log('🔄 جاري جلب جميع أعضاء السيرفر...');
-        await guild.members.fetch({ withPresences: false, force: true });
-        console.log(`✅ تم جلب ${guild.members.cache.size} عضو.`);
-
-        const targetRoleId = '1486587636863864862';
-        console.log(`🎯 الرتبة المستهدفة: ${targetRoleId}`);
-
-        const role = guild.roles.cache.get(targetRoleId);
-        if (!role) {
-          console.log('❌ الرتبة غير موجودة!');
-          return interaction.editReply({ content: '❌ الرتبة غير موجودة.' });
-        }
-        console.log(`✅ تم العثور على الرتبة: "${role.name}" (${role.id})`);
-
-        const members = role.members;
-        console.log(`📊 عدد الأعضاء في role.members: ${members.size}`);
-
-        if (members.size === 0) {
-          return interaction.editReply({ content: '❌ لا يوجد أعضاء في فريق التفعيل.' });
-        }
-
-        console.log('🔄 جاري جلب تواريخ آخر ترقية لكل إداري من قناة الترقيات...');
-        const lastPromotionMap = await getLastPromotionDate(guild);
-        console.log(`✅ تم جلب تواريخ الترقية لـ ${lastPromotionMap.size} إداري.`);
-
-        console.log('🔄 جاري جلب تواريخ رتبة الدعم من روم السجل...');
-        const supportRoleChannelDateMap = await getSupportRoleChannelDates(guild);
-        console.log(`✅ تم جلب تواريخ رتبة الدعم لـ ${supportRoleChannelDateMap.size} إداري من الروم.`);
-
-        console.log('🔄 جاري جلب إجمالي ساعات كل إداري من روم سجل الساعات...');
-        const totalHoursMap = await getTotalHoursMap(guild, [...members.keys()]);
-        console.log(`✅ تم جلب إجمالي الساعات لـ ${totalHoursMap.size} إداري.`);
-
-        const activateChannel = '1484859915200626829';
-        const rejectChannel = '1484865429158756494';
-        const reactivateChannel = '1493565275428225125';
-
-        const days = 7;
-        const [activateMsgs, rejectMsgs, reactivateMsgs] = await Promise.all([
-          fetchMessagesFromDate(activateChannel, Date.now() - days * 24 * 60 * 60 * 1000),
-          fetchMessagesFromDate(rejectChannel, Date.now() - days * 24 * 60 * 60 * 1000),
-          fetchMessagesFromDate(reactivateChannel, Date.now() - days * 24 * 60 * 60 * 1000)
-        ]);
-
-        console.log(`📊 عدد رسائل التفعيل (آخر ${days} يوم): ${activateMsgs.length}`);
-        console.log(`📊 عدد رسائل الرفض (آخر ${days} يوم): ${rejectMsgs.length}`);
-        console.log(`📊 عدد رسائل إعادة التفعيل (آخر ${days} يوم): ${reactivateMsgs.length}`);
-
-        const cutoffDate = Date.now() - days * 24 * 60 * 60 * 1000;
-
-        const statsById = new Map();
-        for (const [id, member] of members) {
-          const promotes = activateMsgs.filter(msg => 
-            msg.createdTimestamp >= cutoffDate && msg.content.includes(`<@${id}>`)
-          ).length;
-          const rejects = rejectMsgs.filter(msg => 
-            msg.createdTimestamp >= cutoffDate && msg.content.includes(`<@${id}>`)
-          ).length;
-          const reactivates = reactivateMsgs.filter(msg => 
-            msg.createdTimestamp >= cutoffDate && msg.content.includes(`<@${id}>`)
-          ).length;
-
-          const totalSeconds = totalHoursMap.get(id) || 0;
-
-          statsById.set(id, { member, activates: promotes, rejects, reactivates, totalSeconds });
-        }
-
-        const assignedIds = new Set();
-        const groupedByRole = [];
-
-        for (const roleId of ALLOWED_ROLE_IDS) {
-          const roleObj = guild.roles.cache.get(roleId);
-          const entries = [];
-          for (const [id, stat] of statsById) {
-            if (assignedIds.has(id)) continue;
-            if (stat.member.roles.cache.has(roleId)) {
-              entries.push(stat);
-              assignedIds.add(id);
-            }
-          }
-          entries.sort((a, b) => b.activates - a.activates);
-          groupedByRole.push({ roleId, roleObj, entries });
-        }
-
-        const noRoleEntries = [];
-        for (const [id, stat] of statsById) {
-          if (!assignedIds.has(id)) noRoleEntries.push(stat);
-        }
-        noRoleEntries.sort((a, b) => b.activates - a.activates);
-
-        let bodyText = '';
-        let totalCount = 0;
-
-        for (const group of groupedByRole) {
-          if (group.entries.length === 0) continue;
-          const roleLabel = group.roleObj ? group.roleObj.name : 'رتبة غير موجودة';
-          bodyText += `\n__**${roleLabel}**__ — \u200E<@&${group.roleId}>\u200E\n`;
-          bodyText += `━━━━━━━━━━━━━━━━━━\n`;
-          for (const stat of group.entries) {
-            bodyText += `\u200E<@${stat.member.id}>\u200E\n`;
-            bodyText += `▪️ **تفعيل شخص (آخر 7 أيام):** ${stat.activates}\n`;
-            bodyText += `▪️ **رفض شخص (آخر 7 أيام):** ${stat.rejects}\n`;
-            bodyText += `▪️ **إعادة تفعيل شخص (آخر 7 أيام):** ${stat.reactivates}\n`;
-            bodyText += `▪️ **عدد ساعات الشخص:** ${formatSecondsToHoursText(stat.totalSeconds)}\n\n`;
-            totalCount++;
-          }
-        }
-
-        if (noRoleEntries.length > 0) {
-          bodyText += `\n__**بدون رتبة من القائمة**__\n`;
-          bodyText += `━━━━━━━━━━━━━━━━━━\n`;
-          for (const stat of noRoleEntries) {
-            bodyText += `\u200E<@${stat.member.id}>\u200E\n`;
-            bodyText += `▪️ **تفعيل شخص (آخر 7 أيام):** ${stat.activates}\n`;
-            bodyText += `▪️ **رفض شخص (آخر 7 أيام):** ${stat.rejects}\n`;
-            bodyText += `▪️ **إعادة تفعيل شخص (آخر 7 أيام):** ${stat.reactivates}\n`;
-            bodyText += `▪️ **عدد ساعات الشخص:** ${formatSecondsToHoursText(stat.totalSeconds)}\n\n`;
-            totalCount++;
-          }
-        }
-
-        const header = `📊 جرد فريق التفعيل (آخر 7 أيام)\n\n`;
-        const footer = `\n**تم جرد ${totalCount} شخص.**`;
-
-        const MAX_MSG_LENGTH = 2000;
-        const fullText = header + bodyText + footer;
-
-        const files = [];
-        if (fs.existsSync(SERVER_LOGO_PATH)) {
-          files.push(new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME }));
-        }
-
-        if (fullText.length <= MAX_MSG_LENGTH) {
-          await interaction.editReply({ content: fullText, files });
-          console.log('✅ تم إرسال النص كاملاً.');
-        } else {
-          const parts = [];
-          let currentPart = '';
-          const lines = bodyText.split('\n');
-          for (const line of lines) {
-            const testPart = currentPart + line + '\n';
-            const testFull = header + testPart + footer;
-            if (testFull.length > MAX_MSG_LENGTH && currentPart.length > 0) {
-              parts.push(currentPart);
-              currentPart = '';
-            }
-            currentPart += (currentPart ? '\n' : '') + line;
-          }
-          if (currentPart) parts.push(currentPart);
-
-          console.log(`📊 عدد الأجزاء: ${parts.length}`);
-
-          for (let i = 0; i < parts.length; i++) {
-            let content;
-            if (i === 0) {
-              content = header + parts[i];
-            } else if (i === parts.length - 1) {
-              content = parts[i] + footer;
-            } else {
-              content = parts[i];
-            }
-
-            if (content.length > MAX_MSG_LENGTH) {
-              const subParts = [];
-              let sub = '';
-              const subLines = content.split('\n');
-              for (const sl of subLines) {
-                if ((sub + sl + '\n').length > MAX_MSG_LENGTH) {
-                  subParts.push(sub);
-                  sub = '';
-                }
-                sub += (sub ? '\n' : '') + sl;
-              }
-              if (sub) subParts.push(sub);
-              for (let j = 0; j < subParts.length; j++) {
-                const subContent = (i === 0 && j === 0) ? header + subParts[j] : subParts[j];
-                if (i === parts.length - 1 && j === subParts.length - 1) {
-                  const finalContent = subContent + footer;
-                  if (j === 0 && i === 0) {
-                    await interaction.editReply({ content: finalContent, files });
-                  } else {
-                    await interaction.followUp({ content: finalContent });
-                  }
-                } else {
-                  if (j === 0 && i === 0) {
-                    await interaction.editReply({ content: subContent, files });
-                  } else {
-                    await interaction.followUp({ content: subContent });
-                  }
-                }
-              }
-              continue;
-            }
-
-            if (i === 0) {
-              await interaction.editReply({ content: content, files });
-            } else {
-              await interaction.followUp({ content: content });
-            }
-            console.log(`✅ تم إرسال الجزء ${i+1}`);
-          }
-          console.log('✅ تم إرسال جميع الأجزاء بنجاح.');
-        }
-
-        console.log(`✅ اكتمل الجرد (آخر 7 أيام): ${totalCount} شخص.`);
-        console.log('==============================================================\n');
-      }
-
-      // ===== /barren_censorship =====
-      if (interaction.commandName === 'barren_censorship') {
-        if (!hasBarrenRole(interaction.member)) {
-          return interaction.reply({
-            content: '❌ هذا الأمر مخصص لأعضاء رتبة محددة فقط.',
-            ephemeral: true
-          });
+        // التحقق من الصلاحية (يمكن تعديلها حسب الرغبة)
+        if (!hasStaffRole(interaction.member)) {
+          return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
         }
 
         await interaction.deferReply();
 
         const guild = interaction.guild;
 
-        console.log('==================== بدء جرد فريق الرقابة ====================');
-        console.log('🔄 جاري جلب جميع أعضاء السيرفر...');
-        await guild.members.fetch({ withPresences: false, force: true });
-        console.log(`✅ تم جلب ${guild.members.cache.size} عضو.`);
-
-        const targetRoleId = CENSORSHIP_TEAM_ROLE_ID;
-        console.log(`🎯 الرتبة المستهدفة: ${targetRoleId}`);
-
-        const role = guild.roles.cache.get(targetRoleId);
-        if (!role) {
-          console.log('❌ الرتبة غير موجودة!');
-          return interaction.editReply({ content: '❌ الرتبة غير موجودة.' });
+        // جلب الرتبة المستهدفة
+        await guild.members.fetch();
+        const targetRole = guild.roles.cache.get(INVENTORY_TARGET_ROLE_ID);
+        if (!targetRole) {
+          return interaction.editReply({ content: '❌ الرتبة المستهدفة غير موجودة.' });
         }
-        console.log(`✅ تم العثور على الرتبة: "${role.name}" (${role.id})`);
 
-        const members = role.members;
-        console.log(`📊 عدد الأعضاء في role.members: ${members.size}`);
-
+        const members = targetRole.members;
         if (members.size === 0) {
-          return interaction.editReply({ content: '❌ لا يوجد أعضاء في فريق الرقابة.' });
+          return interaction.editReply({ content: '❌ لا يوجد أعضاء في هذه الرتبة.' });
         }
 
+        const userIds = [...members.keys()];
         const cutoffDate = Date.now() - 7 * 24 * 60 * 60 * 1000;
 
-        const activityChannel = guild.channels.cache.get(CENSORSHIP_ACTIVITY_CHANNEL_ID);
-        if (!activityChannel) {
-          console.error(`❌ قناة النشاط ${CENSORSHIP_ACTIVITY_CHANNEL_ID} غير موجودة!`);
-          return interaction.editReply({ content: '❌ قناة النشاط غير موجودة.' });
+        // 1. جلب رسائل التفعيل والرفض وإعادة التفعيل
+        const [activationMsgs, rejectionMsgs, reactivationMsgs] = await Promise.all([
+          fetchMessagesFromDate(ACTIVATION_CHANNEL_ID, cutoffDate),
+          fetchMessagesFromDate(REJECTION_CHANNEL_ID, cutoffDate),
+          fetchMessagesFromDate(REACTIVATION_CHANNEL_ID, cutoffDate)
+        ]);
+
+        const countMentions = (msgs, userId) => {
+          let count = 0;
+          for (const msg of msgs) {
+            if (msg.content.includes(`<@${userId}>`)) count++;
+          }
+          return count;
+        };
+
+        // 2. جلب الساعات من الرومين
+        const hoursMap = new Map();
+        for (const channelId of HOURS_CHANNEL_IDS) {
+          const channel = guild.channels.cache.get(channelId);
+          if (!channel) {
+            console.warn(`⚠️ قناة الساعات ${channelId} غير موجودة`);
+            continue;
+          }
+          const latestFields = await getLatestEmbedFieldPerUser(channel, userIds, 'Total Time');
+          for (const [userId, value] of latestFields) {
+            const seconds = parseDurationToSeconds(value);
+            hoursMap.set(userId, (hoursMap.get(userId) || 0) + seconds);
+          }
         }
 
-        console.log('🔄 حساب رسائل "done" بأنماط متعددة من آخر 7 أيام...');
-        const doneCounts = await countDoneMessagesPerUser(activityChannel, new Set(members.keys()), cutoffDate);
-        console.log(`✅ تم حساب رسائل "done" لـ ${doneCounts.size} عضو.`);
-
-        const banPattern = /باند|بان|طرد|حظر/i;
-        const banChannel = guild.channels.cache.get(CENSORSHIP_BAN_CHANNEL_ID);
-        if (!banChannel) {
-          console.error(`❌ قناة الباند ${CENSORSHIP_BAN_CHANNEL_ID} غير موجودة!`);
-          return interaction.editReply({ content: '❌ قناة الباند غير موجودة.' });
+        // 3. جلب عدد المساعدات (الدن)
+        const doneChannel = guild.channels.cache.get(DONE_CHANNEL_ID);
+        const doneMap = new Map();
+        if (doneChannel) {
+          const latestMessages = await getLatestMessagePerUser(doneChannel, userIds);
+          for (const [userId, msg] of latestMessages) {
+            const content = msg.content;
+            const match = content.match(/عدد المساعدات\s*[:]?\s*(\d+)/i);
+            if (match) {
+              doneMap.set(userId, parseInt(match[1]));
+            } else {
+              doneMap.set(userId, 0);
+            }
+          }
         }
 
-        console.log('🔄 حساب رسائل الباند التي تطابق النمط...');
-        const banCounts = await countMessagesWithPattern(banChannel, new Set(members.keys()), banPattern);
-        console.log(`✅ تم حساب رسائل الباند لـ ${banCounts.size} عضو.`);
-
-        const ratingChannel = guild.channels.cache.get(RATING_CHANNEL_ID);
-        if (!ratingChannel) {
-          console.error(`❌ قناة التقييمات ${RATING_CHANNEL_ID} غير موجودة!`);
-          return interaction.editReply({ content: '❌ قناة التقييمات غير موجودة.' });
+        // 4. جلب التقييمات
+        const ratingsChannel = guild.channels.cache.get(RATING_CHANNEL_ID);
+        let ratingsData = new Map();
+        if (ratingsChannel) {
+          ratingsData = await getAdminRatings(ratingsChannel);
         }
 
-        console.log('🔄 جلب جميع التقييمات من قناة التقييمات...');
-        const ratingsData = await getAdminRatings(ratingChannel);
-        console.log(`✅ تم جلب تقييمات لـ ${ratingsData.size} إداري.`);
-
-        const statsById = new Map();
-        for (const [id, member] of members) {
-          const doneCount = doneCounts.get(id) || 0;
-          const bans = banCounts.get(id) || 0;
-          const ratingInfo = ratingsData.get(id);
+        // تجميع الإحصائيات
+        const stats = new Map();
+        for (const userId of userIds) {
+          const activationCount = countMentions(activationMsgs, userId);
+          const rejectionCount = countMentions(rejectionMsgs, userId);
+          const reactivationCount = countMentions(reactivationMsgs, userId);
+          const totalHours = hoursMap.get(userId) || 0;
+          const doneCount = doneMap.get(userId) || 0;
+          const ratingInfo = ratingsData.get(userId);
           const avgRating = ratingInfo ? ratingInfo.average : 0;
           const ratingCount = ratingInfo ? ratingInfo.count : 0;
 
-          statsById.set(id, {
-            member,
+          stats.set(userId, {
+            activationCount,
+            rejectionCount,
+            reactivationCount,
+            totalHours,
             doneCount,
-            bans,
             avgRating,
             ratingCount
           });
         }
 
+        // تجميع الأعضاء حسب ترتيب الرتب
         const assignedIds = new Set();
-        const groupedByRole = [];
-
-        for (const roleId of ALLOWED_ROLE_IDS) {
+        const grouped = [];
+        for (const roleId of ROLE_ORDER) {
           const roleObj = guild.roles.cache.get(roleId);
           const entries = [];
-          for (const [id, stat] of statsById) {
-            if (assignedIds.has(id)) continue;
-            if (stat.member.roles.cache.has(roleId)) {
-              entries.push(stat);
-              assignedIds.add(id);
+          for (const userId of userIds) {
+            if (assignedIds.has(userId)) continue;
+            const member = members.get(userId);
+            if (member && member.roles.cache.has(roleId)) {
+              entries.push({ userId, member, stats: stats.get(userId) });
+              assignedIds.add(userId);
             }
           }
-          entries.sort((a, b) => b.doneCount - a.doneCount || b.avgRating - a.avgRating);
-          groupedByRole.push({ roleId, roleObj, entries });
+          entries.sort((a, b) => b.stats.activationCount - a.stats.activationCount || b.stats.totalHours - a.stats.totalHours);
+          grouped.push({ roleId, roleObj, entries });
         }
 
+        // الأعضاء الذين ليس لديهم أي رتبة من القائمة
         const noRoleEntries = [];
-        for (const [id, stat] of statsById) {
-          if (!assignedIds.has(id)) noRoleEntries.push(stat);
+        for (const userId of userIds) {
+          if (!assignedIds.has(userId)) {
+            const member = members.get(userId);
+            noRoleEntries.push({ userId, member, stats: stats.get(userId) });
+          }
         }
-        noRoleEntries.sort((a, b) => b.doneCount - a.doneCount || b.avgRating - a.avgRating);
+        noRoleEntries.sort((a, b) => b.stats.activationCount - a.stats.activationCount || b.stats.totalHours - a.stats.totalHours);
+        grouped.push({ roleId: null, roleObj: null, entries: noRoleEntries });
 
+        // بناء النص
         let bodyText = '';
         let totalCount = 0;
 
-        for (const group of groupedByRole) {
+        for (const group of grouped) {
           if (group.entries.length === 0) continue;
-          const roleLabel = group.roleObj ? group.roleObj.name : 'رتبة غير موجودة';
-          bodyText += `\n__**${roleLabel}**__ — \u200E<@&${group.roleId}>\u200E\n`;
+          const roleLabel = group.roleObj ? group.roleObj.name : 'بدون رتبة من القائمة';
+          const roleIdStr = group.roleId ? `<@&${group.roleId}>` : '';
+          bodyText += `\n__**${roleLabel}**__ ${roleIdStr}\n`;
           bodyText += `━━━━━━━━━━━━━━━━━━\n`;
-          for (const stat of group.entries) {
-            const avgRatingStr = stat.avgRating ? stat.avgRating.toFixed(1) : '0.0';
-            const stars = stat.avgRating ? ratingStarsBar(Math.round(stat.avgRating)) : '☆☆☆☆☆';
-            bodyText += `:black_small_square: **الاسم:** <@${stat.member.id}>\n`;
-            bodyText += `:black_small_square: **الدن :** ${stat.doneCount}\n`;
-            bodyText += `:black_small_square: **كم بند شخص :** ${stat.bans}\n`;
-            bodyText += `:black_small_square: **التقييمات :** ${avgRatingStr} / 5 ${stars} (${stat.ratingCount} تقييم)\n\n`;
+          for (const entry of group.entries) {
+            const s = entry.stats;
+            const avgRatingStr = s.avgRating ? s.avgRating.toFixed(1) : '0.0';
+            const stars = s.avgRating ? ratingStarsBar(Math.round(s.avgRating)) : '☆☆☆☆☆';
+            bodyText += `▪️ **الاسم:** <@${entry.userId}>\n`;
+            bodyText += `▪️ **تفعيل شخص (آخر 7 أيام):** ${s.activationCount}\n`;
+            bodyText += `▪️ **رفض شخص (آخر 7 أيام):** ${s.rejectionCount}\n`;
+            bodyText += `▪️ **إعادة تفعيل شخص (آخر 7 أيام):** ${s.reactivationCount}\n`;
+            bodyText += `▪️ **عدد ساعات الشخص:** ${formatSecondsToHoursText(s.totalHours)}\n`;
+            bodyText += `▪️ **الدن :** ${s.doneCount}\n`;
+            bodyText += `▪️ **التقييمات :** ${avgRatingStr} / 5 ${stars} (${s.ratingCount} تقييم)\n\n`;
             totalCount++;
           }
         }
 
-        if (noRoleEntries.length > 0) {
-          bodyText += `\n__**بدون رتبة من القائمة**__\n`;
-          bodyText += `━━━━━━━━━━━━━━━━━━\n`;
-          for (const stat of noRoleEntries) {
-            const avgRatingStr = stat.avgRating ? stat.avgRating.toFixed(1) : '0.0';
-            const stars = stat.avgRating ? ratingStarsBar(Math.round(stat.avgRating)) : '☆☆☆☆☆';
-            bodyText += `:black_small_square: **الاسم:** <@${stat.member.id}>\n`;
-            bodyText += `:black_small_square: **الرتبة :** بدون رتبة من القائمة\n`;
-            bodyText += `:black_small_square: **الدن :** ${stat.doneCount}\n`;
-            bodyText += `:black_small_square: **كم بند شخص :** ${stat.bans}\n`;
-            bodyText += `:black_small_square: **التقييمات :** ${avgRatingStr} / 5 ${stars} (${stat.ratingCount} تقييم)\n\n`;
-            totalCount++;
-          }
-        }
-
-        const header = `📊 جرد فريق الرقابة (آخر 7 أيام)\n\n`;
+        const header = `📊 جرد شامل (آخر 7 أيام)\n\n`;
         const footer = `\n**تم جرد ${totalCount} شخص.**`;
-
-        const MAX_MSG_LENGTH = 2000;
-        const fullText = header + bodyText + footer;
 
         const files = [];
         if (fs.existsSync(SERVER_LOGO_PATH)) {
           files.push(new AttachmentBuilder(SERVER_LOGO_PATH, { name: SERVER_LOGO_FILENAME }));
         }
 
+        // تقسيم النص إذا تجاوز الحد
+        const MAX_MSG_LENGTH = 2000;
+        const fullText = header + bodyText + footer;
+
         if (fullText.length <= MAX_MSG_LENGTH) {
           await interaction.editReply({ content: fullText, files });
-          console.log('✅ تم إرسال النص كاملاً.');
         } else {
           const parts = [];
           let currentPart = '';
@@ -1969,8 +1791,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             currentPart += (currentPart ? '\n' : '') + line;
           }
           if (currentPart) parts.push(currentPart);
-
-          console.log(`📊 عدد الأجزاء: ${parts.length}`);
 
           for (let i = 0; i < parts.length; i++) {
             let content;
@@ -2019,13 +1839,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
             } else {
               await interaction.followUp({ content: content });
             }
-            console.log(`✅ تم إرسال الجزء ${i+1}`);
           }
-          console.log('✅ تم إرسال جميع الأجزاء بنجاح.');
         }
 
-        console.log(`✅ اكتمل جرد فريق الرقابة: ${totalCount} شخص.`);
-        console.log('==============================================================\n');
+        console.log(`✅ اكتمل الجرد المدمج: ${totalCount} شخص.`);
+        return;
       }
 
       // /hm_panel
@@ -2089,7 +1907,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
       }
 
-      // ===== أوامر التقارير الجديدة =====
+      // ===== أوامر التقارير =====
       if (interaction.commandName === 'censorship_report') {
         if (!hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ غير مصرح.', ephemeral: true });
@@ -2120,7 +1938,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      // ===== أمر clear (حذف الرسائل) =====
+      // ===== أمر clear =====
       if (interaction.commandName === 'clear') {
         if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages) && !hasStaffRole(interaction.member)) {
           return interaction.reply({ content: '❌ ليس لديك صلاحية لاستخدام هذا الأمر.', flags: 64 });
@@ -2166,7 +1984,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
       }
 
-      // ===== أوامر التفعيل الجديدة: /مفتوح و /مغلق =====
+      // ===== أوامر التفعيل =====
       if (interaction.commandName === 'مفتوح') {
         const allowedRoleIds = ['1486588170282733700', '1524667894711980173'];
         const memberRoles = interaction.member.roles.cache.map(r => r.id);
