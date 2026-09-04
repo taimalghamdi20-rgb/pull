@@ -1707,18 +1707,40 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }
         }
 
-        // 3. جلب عدد المساعدات (الدن) - هذه أيضاً لا تعتمد على التاريخ، بل على أحدث رسالة
+        // =====================================================
+        // 3. جلب عدد المساعدات (الدن) - طريقة جديدة: عدد رسائل العضو في القناة DONE_CHANNEL_ID
+        // =====================================================
         const doneChannel = guild.channels.cache.get(DONE_CHANNEL_ID);
         const doneMap = new Map();
+        // تهيئة جميع المستخدمين بـ 0
+        for (const userId of userIds) doneMap.set(userId, 0);
+
         if (doneChannel) {
-          const latestMessages = await getLatestMessagePerUser(doneChannel, userIds);
-          for (const [userId, msg] of latestMessages) {
-            const content = msg.content;
-            const match = content.match(/عدد المساعدات\s*[:]?\s*(\d+)/i);
-            if (match) {
-              doneMap.set(userId, parseInt(match[1]));
-            } else {
-              doneMap.set(userId, 0);
+          // جلب جميع رسائل القناة من أقدم تاريخ ممكن (oldestCutoff)
+          const allDoneMessages = await fetchMessagesFromDate(DONE_CHANNEL_ID, oldestCutoff);
+          for (const msg of allDoneMessages) {
+            const userId = msg.author.id;
+            if (doneMap.has(userId)) {
+              // تحديد القطع الزمني الخاص بهذا العضو (مثلما نفعل مع التفعيلات)
+              let userCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000; // افتراضي
+              const member = members.get(userId);
+              let isPromotionBased = false;
+              if (member) {
+                for (const roleId of PROMOTION_BASED_ROLES) {
+                  if (member.roles.cache.has(roleId)) {
+                    isPromotionBased = true;
+                    break;
+                  }
+                }
+              }
+              if (isPromotionBased) {
+                const promoDate = promotionDateMap.get(userId);
+                if (promoDate) userCutoff = promoDate;
+                else userCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+              }
+              if (msg.createdTimestamp >= userCutoff) {
+                doneMap.set(userId, doneMap.get(userId) + 1);
+              }
             }
           }
         }
